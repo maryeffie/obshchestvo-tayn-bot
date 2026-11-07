@@ -1,0 +1,24 @@
+[Unit]
+Description=Telegram-бот «Общество тайн»
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=club
+Group=club
+WorkingDirectory=/opt/obshchestvo-tayn
+EnvironmentFile=/opt/obshchestvo-tayn/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/obshchestvo-tayn/.venv/bin/python run.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# базовая изоляция
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

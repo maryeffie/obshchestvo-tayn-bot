@@ -1,0 +1,32 @@
+services:
+  bot:
+    build: .
+    container_name: obshchestvo-tayn-bot
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    ports:
+      # наружу нужен только вебхук; HTTPS лучше отдать Caddy ниже
+      - "127.0.0.1:8080:8080"
+
+  # Автоматический HTTPS для вебхука Prodamus.
+  # Замените club.example.com на свой домен и укажите его в PRODAMUS_WEBHOOK:
+  #   PUBLIC_BASE_URL=https://club.example.com
+  caddy:
+    image: caddy:2-alpine
+    container_name: obshchestvo-tayn-caddy
+    restart: unless-stopped
+    depends_on:
+      - bot
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

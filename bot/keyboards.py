@@ -1,0 +1,135 @@
+"""Клавиатуры и кнопки."""
+
+from __future__ import annotations
+
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+
+def _kb(*rows: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[row for row in rows if row])
+
+
+# ------------------------------------------------------------------ пользователь
+
+def welcome_kb() -> InlineKeyboardMarkup:
+    return _kb([InlineKeyboardButton(text="Вступить в Общество тайн", callback_data="join")])
+
+
+def paywall_kb(pay_url: str, price_label: str) -> InlineKeyboardMarkup:
+    return _kb(
+        [InlineKeyboardButton(text=f"Оплатить {price_label}", url=pay_url)],
+        [InlineKeyboardButton(text="У меня есть промокод", callback_data="promo:enter")],
+    )
+
+
+def paywall_kb_with_promo_reset(pay_url: str, price_label: str) -> InlineKeyboardMarkup:
+    return _kb(
+        [InlineKeyboardButton(text=f"Оплатить {price_label}", url=pay_url)],
+        [InlineKeyboardButton(text="Убрать промокод", callback_data="promo:reset")],
+    )
+
+
+def access_kb(
+    channel_url: str, chat_url: str, show_cancel: bool = False
+) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="Перейти в закрытый канал", url=channel_url)],
+        [InlineKeyboardButton(text="Перейти в чат обсуждений", url=chat_url)],
+    ]
+    if show_cancel:
+        rows.append(
+            [InlineKeyboardButton(text="Отменить подписку", callback_data="sub:cancel")]
+        )
+    return _kb(*rows)
+
+
+def member_kb(show_cancel: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="Получить новые ссылки", callback_data="links:resend")],
+        [InlineKeyboardButton(text="Моя подписка", callback_data="status")],
+    ]
+    if show_cancel:
+        rows.append(
+            [InlineKeyboardButton(text="Отменить подписку", callback_data="sub:cancel")]
+        )
+    return _kb(*rows)
+
+
+def cancel_confirm_kb() -> InlineKeyboardMarkup:
+    return _kb(
+        [InlineKeyboardButton(text="Да, отменить подписку", callback_data="sub:cancel_yes")],
+        [InlineKeyboardButton(text="Оставить как есть", callback_data="sub:cancel_no")],
+        [InlineKeyboardButton(text="Моя подписка", callback_data="status")],
+    )
+
+
+def retry_kb() -> InlineKeyboardMarkup:
+    return _kb([InlineKeyboardButton(text="Повторить оплату", callback_data="join")])
+
+
+def renew_url_kb(pay_url: str, price_label: str) -> InlineKeyboardMarkup:
+    """Продление в один клик: кнопка сразу ведёт на страницу оплаты."""
+    return _kb(
+        [InlineKeyboardButton(text=f"Продлить на месяц — {price_label}", url=pay_url)],
+        [InlineKeyboardButton(text="Моя подписка", callback_data="status")],
+    )
+
+
+def renew_kb(price_label: str) -> InlineKeyboardMarkup:
+    """Кнопка продления в напоминаниях (бесплатный режим — продление вручную)."""
+    return _kb(
+        [InlineKeyboardButton(text=f"Продлить на месяц — {price_label}", callback_data="join")]
+    )
+
+
+def return_kb() -> InlineKeyboardMarkup:
+    return _kb([InlineKeyboardButton(text="Вернуться в клуб", callback_data="join")])
+
+
+def promo_cancel_kb() -> InlineKeyboardMarkup:
+    return _kb([InlineKeyboardButton(text="Отмена", callback_data="promo:cancel")])
+
+
+# ------------------------------------------------------------------- админ-панель
+
+def admin_kb() -> InlineKeyboardMarkup:
+    return _kb(
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")],
+        [
+            InlineKeyboardButton(text="🎁 Выдать доступ", callback_data="adm:grant"),
+            InlineKeyboardButton(text="🚫 Забрать доступ", callback_data="adm:revoke"),
+        ],
+        [
+            InlineKeyboardButton(text="🏷 Промокоды", callback_data="adm:promos"),
+            InlineKeyboardButton(text="👤 Найти участника", callback_data="adm:find"),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔁 Отменить автосписание", callback_data="adm:cancel_sub"
+            )
+        ],
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="adm:panel")],
+    )
+
+
+def promos_kb(promos: list[dict]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Создать промокод", callback_data="adm:promo_new")
+    for promo in promos:
+        if promo["active"]:
+            builder.button(
+                text=f"⛔ Отключить {promo['code']}",
+                callback_data=f"adm:promo_off:{promo['code']}",
+            )
+    builder.button(text="⬅️ Назад", callback_data="adm:panel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def back_to_panel_kb() -> InlineKeyboardMarkup:
+    return _kb([InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="adm:panel")])
+
+
+def cancel_kb() -> InlineKeyboardMarkup:
+    return _kb([InlineKeyboardButton(text="Отмена", callback_data="adm:panel")])

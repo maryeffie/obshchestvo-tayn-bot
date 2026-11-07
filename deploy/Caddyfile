@@ -1,0 +1,11 @@
+# Замените club.example.com на свой домен (A-запись должна указывать на сервер).
+# Caddy сам получит и продлит сертификат Let's Encrypt.
+
+club.example.com {
+	encode zstd gzip
+	reverse_proxy bot:8080
+	log {
+		output file /data/access.log
+		format console
+	}
+}
