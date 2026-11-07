@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from bot.handlers import admin as admin_handlers
 from bot.handlers import user as user_handlers
 
-from .helpers import make_app
+from .helpers import ButtonTexts, buttons_of, make_app
 
 
 class FakeMessage:
@@ -73,10 +73,8 @@ def _handler(router, event: str, name: str):
     raise AssertionError(f"Хендлер {name} не зарегистрирован в {event}")
 
 
-def _buttons(keyboard) -> list[str]:
-    if keyboard is None:
-        return []
-    return [button.text for row in keyboard.inline_keyboard for button in row]
+def _buttons(keyboard) -> ButtonTexts:
+    return buttons_of(keyboard)
 
 
 def test_routers_register_handlers() -> None:
@@ -161,7 +159,7 @@ def test_admin_panel_available_for_admin() -> None:
         assert "Админ-панель" in message.last_text
         buttons = _buttons(message.answers[-1]["keyboard"])
         assert "🎁 Выдать доступ" in buttons
-        assert "🏷 Промокоды" in buttons
+        assert "🏷 Промокоды" not in buttons  # промокоды убраны из панели
         await app.db.close()
 
     asyncio.run(scenario())

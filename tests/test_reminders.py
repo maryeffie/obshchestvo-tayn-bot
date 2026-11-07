@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from bot.utils import from_iso, utcnow
 
-from .helpers import make_app
+from .helpers import buttons_of, make_app
 
 
 def _revive(app, tg_id: int, paid_until):
@@ -29,7 +29,7 @@ def test_three_stage_reminder_chain() -> None:
         text = app.bot.last_to(701)["text"]
         assert "пришло время продлить" in text
         keyboard = app.bot.last_to(701)["keyboard"]
-        buttons = [b.text for row in keyboard.inline_keyboard for b in row]
+        buttons = buttons_of(keyboard)
         assert buttons == ["Продлить на месяц — 790 ₽", "Моя подписка"]
         # первая кнопка — сразу на форму оплаты Prodamus, без лишнего шага
         pay_button = keyboard.inline_keyboard[0][0]

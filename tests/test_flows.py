@@ -9,7 +9,7 @@ from datetime import timedelta
 from bot.prodamus import sign_payload
 from bot.utils import from_iso, utcnow
 
-from .helpers import make_app
+from .helpers import buttons_of, make_app
 
 
 def _success_payload(order_id: str, tg_id: int, amount: int = 790) -> dict:
@@ -59,11 +59,7 @@ def test_paid_webhook_grants_access() -> None:
         user_texts = bot.texts_to(555)
         assert any("Поздравляем" in text for text in user_texts)
         last = bot.last_to(555)
-        buttons = [
-            button.text
-            for row in last["keyboard"].inline_keyboard
-            for button in row
-        ]
+        buttons = buttons_of(last["keyboard"])
         assert buttons == ["Перейти в закрытый канал", "Перейти в чат обсуждений"]
 
         assert any("Новая оплата" in text for text in bot.texts_to(111))
@@ -134,7 +130,7 @@ def test_failed_payment_sends_retry_button() -> None:
         assert result == "failed"
         last = app.bot.last_to(558)
         assert "Небольшая заминка" in last["text"]
-        buttons = [b.text for row in last["keyboard"].inline_keyboard for b in row]
+        buttons = buttons_of(last["keyboard"])
         assert buttons == ["Повторить оплату"]
         order = await app.db.get_order(order_id)
         assert order["status"] == "failed"
@@ -234,7 +230,7 @@ def test_reminder_then_auto_kick() -> None:
         assert len(app.bot.unbanned) == 2
         last = app.bot.last_to(561)
         assert "перестал действовать" in last["text"]
-        buttons = [b.text for row in last["keyboard"].inline_keyboard for b in row]
+        buttons = buttons_of(last["keyboard"])
         assert buttons == ["Вернуться в клуб"]
 
         user = await app.db.get_user(561)

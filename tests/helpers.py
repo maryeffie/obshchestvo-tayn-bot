@@ -17,6 +17,27 @@ from bot.services.tasks import ScheduledTasks
 _counter = itertools.count(1)
 
 
+class ButtonTexts(list):
+    """Подписи кнопок. `in` ищет подстроку, `==` игнорирует эмодзи-префиксы."""
+
+    def __contains__(self, item) -> bool:  # type: ignore[override]
+        return any(str(item) in text for text in self)
+
+    def __eq__(self, other) -> bool:  # type: ignore[override]
+        if isinstance(other, (list, tuple)) and len(other) == len(self):
+            return all(str(expected) in text for expected, text in zip(other, self))
+        return list.__eq__(self, other)
+
+    def __ne__(self, other) -> bool:  # type: ignore[override]
+        return not self.__eq__(other)
+
+
+def buttons_of(keyboard) -> ButtonTexts:
+    if keyboard is None:
+        return ButtonTexts()
+    return ButtonTexts(b.text for row in keyboard.inline_keyboard for b in row)
+
+
 class FakeBot:
     """Повторяет только тот кусок Bot API, который использует бот."""
 
