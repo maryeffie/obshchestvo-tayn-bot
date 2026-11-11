@@ -6,6 +6,8 @@ import logging
 import re
 from datetime import timedelta
 
+import aiohttp
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -21,6 +23,7 @@ from ..keyboards import (
     cancel_kb,
     promos_kb,
 )
+from ..prodamus import sign_payload
 from ..utils import (
     fmt_date,
     from_iso,
@@ -93,6 +96,92 @@ def build_router(app: App) -> Router:
     async def cmd_chatid(message: Message) -> None:
         await message.answer(
             f"chat_id: <code>{message.chat.id}</code>\nтип чата: {message.chat.type}"
+        )
+
+    @router.message(Command("fakepay"), is_admin)
+    async def cmd_fakepay(message: Message) -> None:
+        """Полная проверка оплаты без денег: шлём сами себе подписанный вебхук.
+
+        Формат: /fakepay — на себе, /fakepay 123456789 — на участнике,
+        /fakepay 123456789 100 — своя сумма.
+        """
+        if message.from_user is None:
+            return
+        parts = (message.text or "").split()[1:]
+        if parts and not parts[0].isdigit():
+            await message.answer(
+                "Формат: <code>/fakepay</code> — на себе,\n"
+                "<code>/fakepay 123456789</code> — на участнике,\n"
+                "<code>/fakepay 123456789 100</code> — своя сумма."
+            )
+            return
+        tg_id = int(parts[0]) if parts else message.from_user.id
+        amount = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else settings.price
+        await db.upsert_user(tg_id)
+        order_id = payments.new_order_id(tg_id)
+        await db.create_order(
+            order_id=order_id,
+            tg_id=tg_id,
+            amount=amount,
+            is_recurring=settings.is_recurrent,
+        )
+        data = {
+            "order_id": order_id,
+            "order_num": order_id,
+            "payment_status": "success",
+            "payment_status_description": "Тестовая оплата из бота",
+            "sum": str(amount),
+            "customer_extra": f"tg:{tg_id}",
+            "customer_phone": "+70000000000",
+            "customer_email": "test@example.com",
+            "products": [
+                {
+                    "name": settings.product_name,
+                    "price": str(amount),
+                    "quantity": "1",
+                    "sum": str(amount),
+                }
+            ],
+        }
+        signature = sign_payload(data, settings.prodamus_secret)
+
+        delivered = False
+        detail = ""
+        if settings.public_base_url:
+            try:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(
+                        settings.webhook_url, json=data, headers={"Sign": signature}
+                    ) as response:
+                        delivered = response.status == 200
+                        detail = f"HTTP {response.status}"
+            except Exception as exc:  # noqa: BLE001
+                detail = f"не смог достучаться до {settings.webhook_url}: {exc}"
+
+        if delivered:
+            await message.answer(
+                "🧪 <b>Тестовый платёж отправлен на вебхук</b>\n\n"
+                f"Заказ: <code>{order_id}</code>\n"
+                f"ID участника: <code>{tg_id}</code>\n"
+                f"Сумма: {fmt_price(amount, settings.currency)}\n\n"
+                "Проверьте логи: должна быть строка «Вебхук обработан: paid». "
+                "Участнику придут ссылки в канал и чат.",
+                reply_markup=back_to_panel_kb(),
+            )
+            return
+
+        # если свой же вебхук недоступен — прогоняем обработку напрямую
+        result = await payments.handle(data)
+        await message.answer(
+            "🧪 <b>Тестовый платёж прогнан напрямую</b>\n\n"
+            f"Результат: <code>{result}</code>\n"
+            f"Заказ: <code>{order_id}</code>\n"
+            f"ID участника: <code>{tg_id}</code>\n"
+            f"Сумма: {fmt_price(amount, settings.currency)}\n\n"
+            f"Вебхук проверить не удалось: {detail or 'адрес не задан'}.\n"
+            "Цепочка выдачи доступа при этом проверена.",
+            reply_markup=back_to_panel_kb(),
         )
 
     @router.message(Command("links"), is_admin)

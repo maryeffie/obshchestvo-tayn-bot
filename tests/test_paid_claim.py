@@ -71,3 +71,24 @@ def test_admin_testpay_command_grants_access_without_prodamus() -> None:
         await app.db.close()
 
     asyncio.run(scenario())
+
+
+def test_admin_fakepay_runs_full_payment_path_without_money() -> None:
+    """Тестовая оплата через вебхук: деньги не нужны, доступ выдаётся."""
+
+    async def scenario() -> None:
+        # без публичного адреса бот прогоняет обработку напрямую
+        app = await make_app(public_base_url="")
+        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+
+        message = FakeMessage("/fakepay 888", user_id=ADMIN_ID)
+        await _handler(router, "message", "cmd_fakepay")(message)
+
+        assert "Тестовый платёж" in message.last_text
+        user = await app.db.get_user(888)
+        assert is_active(user)
+        assert len(app.bot.invites) >= 2
+
+        await app.db.close()
+
+    asyncio.run(scenario())

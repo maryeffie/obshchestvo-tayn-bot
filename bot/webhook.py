@@ -62,7 +62,12 @@ def create_webhook_app(app: App) -> web.Application:
         if not verified:
             order_id = str(data.get("order_num") or data.get("order_id") or "")
             order = await app.db.get_order(order_id) if order_id else None
-            if order is not None and order.get("status") == "pending":
+            amount_matches = bool(
+                order
+                and str(data.get("sum", "")).replace(",", ".").split(".")[0].isdigit()
+                and int(float(str(data.get("sum")).replace(",", "."))) == int(order["amount"])
+            )
+            if order is not None and order.get("status") == "pending" and amount_matches:
                 # Человек заплатил по нашей ссылке — лучше открыть доступ,
                 # чем оставить его без клуба из-за спора о подписи.
                 log.warning(
