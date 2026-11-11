@@ -38,7 +38,7 @@ def test_paywall_offers_other_currency_with_universal_link() -> None:
         sent = call.message.answers[-1]
         assert "Тайны не знают границ" in sent["text"]
         url_button = sent["keyboard"].inline_keyboard[0][0]
-        assert url_button.url.startswith("https://payform.ru/nqd02rT/?")
+        assert url_button.url.startswith("https://payform.ru/g7d0lTx/?")
         params = _params(url_button.url)
         assert params["customer_extra"] == "tg:801"      # по нему найдём человека
         assert params["order_id"].startswith("tg801-")
@@ -60,7 +60,7 @@ def test_foreign_payment_grants_month_without_autorenew() -> None:
         await app.db.upsert_user(802, "john", "John")
         url, amount, order_id, currency = await app.payments.create_foreign_link(802)
         assert currency == "rub" and amount == 790
-        assert "payform.ru/nqd02rT" in url
+        assert "payform.ru/g7d0lTx" in url
 
         # Prodamus присылает платёж в валюте плательщика — 9 евро
         result = await app.payments.handle(
@@ -89,7 +89,7 @@ def test_foreign_payment_grants_month_without_autorenew() -> None:
 
         # продление — снова та же бессрочная ссылка в валюте
         renew_url, renew_amount, _order, renew_currency = await app.payments.create_link_auto(802)
-        assert "payform.ru/nqd02rT" in renew_url
+        assert "payform.ru/g7d0lTx" in renew_url
         assert renew_amount == 790 and renew_currency == "rub"
 
         await app.db.close()

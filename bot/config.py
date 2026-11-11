@@ -179,7 +179,7 @@ def load_settings() -> Settings:
         prodamus_url_success=_raw("PRODAMUS_URL_SUCCESS", BOT_LINK),
         prodamus_url_return=_raw("PRODAMUS_URL_RETURN", BOT_LINK),
         prodamus_foreign_url=_switchable(
-            "PRODAMUS_FOREIGN_URL", "https://payform.ru/nqd02rT/"
+            "PRODAMUS_FOREIGN_URL", "https://payform.ru/g7d0lTx/"
         ),
         webhook_host=_raw("WEBHOOK_HOST", "0.0.0.0"),
         webhook_port=_int("WEBHOOK_PORT", _int("PORT", 8080)),

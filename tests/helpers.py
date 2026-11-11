@@ -122,7 +122,7 @@ def make_settings(**overrides) -> Settings:
         prodamus_send_tg_user_id=True,
         prodamus_url_success="https://t.me/society_secrets_bot",
         prodamus_url_return="https://t.me/society_secrets_bot",
-        prodamus_foreign_url="https://payform.ru/nqd02rT/",
+        prodamus_foreign_url="https://payform.ru/g7d0lTx/",
         webhook_host="0.0.0.0",
         webhook_port=8080,
         webhook_path="/prodamus/webhook",
