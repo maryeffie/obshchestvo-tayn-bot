@@ -45,7 +45,10 @@ def paywall_kb(
 def foreign_pay_kb(pay_url: str) -> InlineKeyboardMarkup:
     return _kb(
         [InlineKeyboardButton(text="💳 Перейти к оплате", url=pay_url)],
-        [InlineKeyboardButton(text="📅 Моя подписка", callback_data="status")],
+        [
+            InlineKeyboardButton(text="↩️ Назад", callback_data="join"),
+            InlineKeyboardButton(text="📅 Моя подписка", callback_data="status"),
+        ],
     )
 
 

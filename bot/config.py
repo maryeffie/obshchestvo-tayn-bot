@@ -34,6 +34,20 @@ def _raw(name: str, default: str | None = None, required: bool = False) -> str |
     return value
 
 
+# куда возвращать человека после оплаты — в чат с ботом
+BOT_LINK = "https://t.me/society_secrets_bot"
+
+
+def _switchable(name: str, default: str) -> str | None:
+    """Ссылка из переменной окружения; значение off/none/0 полностью выключает."""
+    value = _raw(name, default)
+    if value is None:
+        return None
+    if value.strip().lower() in {"off", "none", "0", "no", "нет"}:
+        return None
+    return value
+
+
 def _int(name: str, default: int | None = None, required: bool = False) -> int | None:
     raw = _raw(name, None, required)
     if raw is None:
@@ -162,9 +176,11 @@ def load_settings() -> Settings:
         prodamus_sys=_raw("PRODAMUS_SYS"),
         prodamus_sign_links=_bool("PRODAMUS_SIGN_LINKS", True),
         prodamus_send_tg_user_id=_bool("PRODAMUS_SEND_TG_USER_ID", True),
-        prodamus_url_success=_raw("PRODAMUS_URL_SUCCESS"),
-        prodamus_url_return=_raw("PRODAMUS_URL_RETURN"),
-        prodamus_foreign_url=_raw("PRODAMUS_FOREIGN_URL"),
+        prodamus_url_success=_raw("PRODAMUS_URL_SUCCESS", BOT_LINK),
+        prodamus_url_return=_raw("PRODAMUS_URL_RETURN", BOT_LINK),
+        prodamus_foreign_url=_switchable(
+            "PRODAMUS_FOREIGN_URL", "https://payform.ru/nqd02rT/"
+        ),
         webhook_host=_raw("WEBHOOK_HOST", "0.0.0.0"),
         webhook_port=_int("WEBHOOK_PORT", _int("PORT", 8080)),
         webhook_path=_normalize_path(_raw("WEBHOOK_PATH", "/prodamus/webhook")),

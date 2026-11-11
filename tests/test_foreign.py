@@ -43,6 +43,11 @@ def test_paywall_offers_other_currency_with_universal_link() -> None:
         assert params["customer_extra"] == "tg:801"      # по нему найдём человека
         assert params["order_id"].startswith("tg801-")
         assert "subscription" not in params              # разовый платёж, без автосписания
+        # после оплаты Prodamus возвращает человека в чат с ботом
+        assert params["urlReturn"] == "https://t.me/society_secrets_bot"
+
+        # 3. со страницы валюты можно вернуться к выбору способа оплаты
+        assert "Назад" in buttons_of(sent["keyboard"])
 
         await app.db.close()
 
