@@ -39,17 +39,19 @@ def paywall_kb(
     pay_url: str, price_label: str, *, with_foreign: bool = False
 ) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=f"💳 Оплатить {price_label}", url=pay_url)],
-        [InlineKeyboardButton(text="✅ Я оплатил — проверить", callback_data="paid:notify")],
+        [InlineKeyboardButton(text=f"💳 Оплатить в рублях {price_label}", url=pay_url)]
     ]
     if with_foreign:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🌍 Оплатить из другой страны", callback_data="cur:menu"
+                    text="🌍 Оплатить в другой валюте", callback_data="cur:menu"
                 )
             ]
         )
+    rows.append(
+        [InlineKeyboardButton(text="✅ Я оплатил — проверить", callback_data="paid:notify")]
+    )
     return _kb(*rows)
 
 
@@ -78,7 +80,7 @@ def quick_grant_kb(tg_id: int) -> InlineKeyboardMarkup:
 
 def paywall_kb_with_promo_reset(pay_url: str, price_label: str) -> InlineKeyboardMarkup:
     return _kb(
-        [InlineKeyboardButton(text=f"💳 Оплатить {price_label}", url=pay_url)],
+        [InlineKeyboardButton(text=f"💳 Оплатить в рублях {price_label}", url=pay_url)],
         [InlineKeyboardButton(text="↩️ Убрать промокод", callback_data="promo:reset")],
     )
 
@@ -124,7 +126,7 @@ def retry_kb() -> InlineKeyboardMarkup:
 def renew_url_kb(pay_url: str, price_label: str) -> InlineKeyboardMarkup:
     """Продление в один клик: кнопка сразу ведёт на страницу оплаты."""
     return _kb(
-        [InlineKeyboardButton(text=f"💳 Продлить на месяц — {price_label}", url=pay_url)],
+        [InlineKeyboardButton(text="💳 Продлить подписку", url=pay_url)],
         [InlineKeyboardButton(text="📅 Моя подписка", callback_data="status")],
     )
 
@@ -132,7 +134,7 @@ def renew_url_kb(pay_url: str, price_label: str) -> InlineKeyboardMarkup:
 def renew_kb(price_label: str) -> InlineKeyboardMarkup:
     """Кнопка продления в напоминаниях (бесплатный режим — продление вручную)."""
     return _kb(
-        [InlineKeyboardButton(text=f"💳 Продлить на месяц — {price_label}", callback_data="join")]
+        [InlineKeyboardButton(text="💳 Продлить подписку", callback_data="join")]
     )
 
 

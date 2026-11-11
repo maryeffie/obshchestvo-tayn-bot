@@ -64,7 +64,11 @@ def build_router(app: App) -> Router:
         else:
             text = texts.BEFORE_PAYMENT.format(price=price_label)
             keyboard = paywall_kb(
-                url, amount_label, with_foreign=bool(settings.foreign_prices)
+                url,
+                amount_label,
+                with_foreign=bool(
+                    settings.prodamus_foreign_url or settings.foreign_prices
+                ),
             )
         await message.answer(text, reply_markup=keyboard, disable_web_page_preview=True)
 
@@ -111,14 +115,24 @@ def build_router(app: App) -> Router:
     @router.callback_query(F.data == "cur:menu")
     async def cb_currency_menu(call: CallbackQuery) -> None:
         await call.answer()
-        if call.message is None:
+        if call.message is None or call.from_user is None:
             return
-        options = currency_options(settings.foreign_prices, fmt_price)
-        if not options:
-            await call.message.answer(texts.FOREIGN_UNAVAILABLE)
+        text = texts.FOREIGN_CHOOSE.format(days=settings.subscription_days)
+        try:
+            # основная дорожка: бессрочная ссылка Prodamus с конвертацией валюты
+            url, _amount, _order_id, _currency = await payments.create_foreign_link(
+                call.from_user.id
+            )
+        except ValueError:
+            # запасная: отдельный счёт в конкретной валюте
+            options = currency_options(settings.foreign_prices, fmt_price)
+            if not options:
+                await call.message.answer(texts.FOREIGN_UNAVAILABLE)
+                return
+            await call.message.answer(text, reply_markup=currency_kb(options))
             return
         await call.message.answer(
-            texts.FOREIGN_CHOOSE, reply_markup=currency_kb(options)
+            text, reply_markup=foreign_pay_kb(url), disable_web_page_preview=True
         )
 
     @router.callback_query(F.data.startswith("cur:pay:"))
@@ -127,7 +141,7 @@ def build_router(app: App) -> Router:
             return
         code = call.data.rsplit(":", 1)[1].lower()
         try:
-            url, amount, _order_id = await payments.create_foreign_link(
+            url, amount, _order_id, _currency = await payments.create_foreign_link(
                 call.from_user.id, code
             )
         except (ValueError, KeyError):

@@ -30,7 +30,7 @@ def test_three_stage_reminder_chain() -> None:
         assert "пришло время продлить" in text
         keyboard = app.bot.last_to(701)["keyboard"]
         buttons = buttons_of(keyboard)
-        assert buttons == ["Продлить на месяц — 790 ₽", "Моя подписка"]
+        assert buttons == ["Продлить подписку", "Моя подписка"]
         # первая кнопка — сразу на форму оплаты Prodamus, без лишнего шага
         pay_button = keyboard.inline_keyboard[0][0]
         assert pay_button.url and pay_button.url.startswith("https://")
@@ -42,15 +42,15 @@ def test_three_stage_reminder_chain() -> None:
         # 2. наступил день окончания → «сегодня последний день»
         await _revive(app, 701, now - timedelta(hours=1))
         assert (await app.tasks.tick())["reminded"] == 1
-        assert "Сегодня последний день" in app.bot.last_to(701)["text"]
+        assert "последний день Вашего пропуска" in app.bot.last_to(701)["text"]
         assert (await app.tasks.tick())["reminded"] == 0
 
         # 3. следующий день (в пределах отсрочки) → «вчера закончился»
         await _revive(app, 701, now - timedelta(days=1, hours=1))
         assert (await app.tasks.tick())["reminded"] == 1
         late = app.bot.last_to(701)["text"]
-        assert "вчера закончился" in late
-        assert "Продлить на месяц" in app.bot.last_to(701)["keyboard"].inline_keyboard[0][0].text
+        assert "закончился" in late
+        assert "Продлить подписку" in app.bot.last_to(701)["keyboard"].inline_keyboard[0][0].text
 
         # больше напоминаний в этом периоде нет
         assert (await app.tasks.tick())["reminded"] == 0

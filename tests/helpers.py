@@ -125,6 +125,7 @@ def make_settings(**overrides) -> Settings:
         prodamus_send_tg_user_id=True,
         prodamus_url_success=None,
         prodamus_url_return=None,
+        prodamus_foreign_url="https://payform.ru/nqd02rT/",
         webhook_host="0.0.0.0",
         webhook_port=8080,
         webhook_path="/prodamus/webhook",

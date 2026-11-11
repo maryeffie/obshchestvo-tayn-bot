@@ -62,17 +62,36 @@ class PaymentProcessor:
         url = self.prodamus.payment_url(tg_id, order_id, self.settings.price, discount)
         return url, amount, order_id, discount
 
-    async def create_foreign_link(self, tg_id: int, currency: str) -> tuple[str, int, str]:
-        """Разовая оплата в валюте — для покупателей из других стран.
+    async def create_foreign_link(
+        self, tg_id: int, currency: str | None = None
+    ) -> tuple[str, int, str, str]:
+        """Разовая оплата для покупателей из других стран.
 
-        Подписка (автосписание) в Prodamus возможна только в рублях и только
-        по картам РФ, поэтому иностранцам выдаём разовый счёт на месяц.
+        Приоритет — бессрочная ссылка Prodamus с авто-конвертацией: сумма
+        пересчитывается в валюту плательщика по курсу банка. Если она не задана,
+        выставляем счёт в конкретной валюте (eur/usd/byn).
+
+        Подписка с автосписанием в Prodamus возможна только в рублях и только
+        по картам РФ, поэтому для зарубежных платежей — только разовый счёт.
         """
+        order_id = self.new_order_id(tg_id)
+        if not currency:
+            url = self.prodamus.foreign_payment_url(tg_id, order_id)
+            if url is None:
+                raise ValueError("Ссылка для оплаты из-за рубежа не настроена")
+            await self.db.create_order(
+                order_id=order_id,
+                tg_id=tg_id,
+                amount=self.settings.price,
+                is_recurring=False,
+                currency="foreign",
+            )
+            return url, self.settings.price, order_id, "rub"
+
         currency = currency.lower()
         amount = self.settings.foreign_prices.get(currency)
         if not amount:
             raise ValueError(f"Валюта {currency} не настроена")
-        order_id = self.new_order_id(tg_id)
         await self.db.create_order(
             order_id=order_id,
             tg_id=tg_id,
@@ -81,15 +100,23 @@ class PaymentProcessor:
             currency=currency,
         )
         url = self.prodamus.payment_url(tg_id, order_id, amount, currency=currency)
-        return url, amount, order_id
+        return url, amount, order_id, currency
 
     async def create_link_auto(self, tg_id: int) -> tuple[str, int, str, str]:
-        """Ссылка для «Продлить»: в валюте прошлой оплаты, если она была не в рублях."""
+        """Ссылка для «Продлить»: та же дорожка, по которой человек платил в прошлый раз."""
         user = await self.db.get_user(tg_id) or {}
         currency = str(user.get("last_currency") or "rub").lower()
-        if currency != "rub" and currency in self.settings.foreign_prices:
-            url, amount, order_id = await self.create_foreign_link(tg_id, currency)
-            return url, amount, order_id, currency
+        if currency != "rub":
+            # приоритет — бессрочная ссылка с конвертацией, если она настроена
+            specific = (
+                None
+                if self.settings.prodamus_foreign_url
+                else (currency if currency in self.settings.foreign_prices else None)
+            )
+            try:
+                return await self.create_foreign_link(tg_id, specific)
+            except ValueError:
+                log.warning("Не удалось собрать зарубежную ссылку, отдаю рублёвую")
         url, amount, order_id, _discount = await self.create_payment_link(tg_id)
         return url, amount, order_id, "rub"
 
@@ -100,8 +127,14 @@ class PaymentProcessor:
         note = self.prodamus.parse(data)
         order = await self.db.get_order(note.order_id) if note.order_id else None
         order_currency = str((order or {}).get("currency") or "rub").lower()
+        paid_currency = (note.currency or "").lower()
+        # платёж из-за рубежа: валютный счёт или бессрочная ссылка с конвертацией
+        is_foreign = order_currency not in {"rub"} or paid_currency not in {"", "rub"}
+        display_currency = paid_currency or (
+            order_currency if order_currency != "foreign" else "rub"
+        )
         # в статистике всё считаем в рублях: один оплаченный месяц = цена подписки
-        stats_amount = note.amount if order_currency == "rub" else self.settings.price
+        stats_amount = self.settings.price if is_foreign else note.amount
         await self.db.add_payment(
             order_id=note.order_id,
             tg_id=note.tg_id,
@@ -174,10 +207,10 @@ class PaymentProcessor:
             paid_until = now + timedelta(days=self.settings.subscription_days)
 
         await self.db.activate(tg_id, paid_until, source="prodamus", paid_at=now)
-        if order_currency != "rub":
-            # оплата в валюте — разовая: автопродления нет, продление вручную
+        if is_foreign:
+            # оплата из-за рубежа — разовая: автопродления нет, продление вручную
             await self.db.set_auto_renew(tg_id, False)
-            await self.db.set_last_currency(tg_id, order_currency)
+            await self.db.set_last_currency(tg_id, display_currency)
         if order is not None:
             await self.db.set_order_status(order["order_id"], "paid")
             if order.get("promo_code"):
@@ -192,7 +225,7 @@ class PaymentProcessor:
         await self.access.notify_payment(
             tg_id,
             paid_amount,
-            currency=order_currency,
+            currency=display_currency,
             renewal=is_renewal,
             promo_code=(order or {}).get("promo_code"),
             username=(user or {}).get("username"),
@@ -200,7 +233,7 @@ class PaymentProcessor:
         log.info(
             "Оплата засчитана: tg_id=%s, %s, продление=%s, доступ до %s",
             tg_id,
-            fmt_price(paid_amount, order_currency),
+            fmt_price(paid_amount, display_currency),
             is_renewal,
             paid_until.isoformat(),
         )

@@ -110,6 +110,8 @@ class Settings:
     prodamus_send_tg_user_id: bool
     prodamus_url_success: str | None
     prodamus_url_return: str | None
+    # бессрочная ссылка с авто-конвертацией валюты (для покупателей из-за рубежа)
+    prodamus_foreign_url: str | None
 
     # Вебхук
     webhook_host: str
@@ -173,6 +175,7 @@ def load_settings() -> Settings:
         prodamus_send_tg_user_id=_bool("PRODAMUS_SEND_TG_USER_ID", True),
         prodamus_url_success=_raw("PRODAMUS_URL_SUCCESS"),
         prodamus_url_return=_raw("PRODAMUS_URL_RETURN"),
+        prodamus_foreign_url=_raw("PRODAMUS_FOREIGN_URL"),
         webhook_host=_raw("WEBHOOK_HOST", "0.0.0.0"),
         webhook_port=_int("WEBHOOK_PORT", _int("PORT", 8080)),
         webhook_path=_normalize_path(_raw("WEBHOOK_PATH", "/prodamus/webhook")),

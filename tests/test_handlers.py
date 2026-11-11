@@ -106,7 +106,7 @@ def test_start_and_join_flow() -> None:
         await _handler(router, "callback_query", "cb_join")(call, state)
         paywall = call.message.answers[-1]
         assert "Остался всего один шаг!" in paywall["text"]
-        assert "Оплатить 790 ₽" in _buttons(paywall["keyboard"])
+        assert "Оплатить в рублях 790 ₽" in _buttons(paywall["keyboard"])
         url_button = paywall["keyboard"].inline_keyboard[0][0]
         assert url_button.url.startswith("https://demo.payform.ru/?")
         assert "subscription=4242" in url_button.url
@@ -129,7 +129,7 @@ def test_promo_entry_recalculates_price() -> None:
         assert "Промокод принят" in message.answers[0]["text"]
         paywall = message.answers[-1]
         assert "скидка 20%" in paywall["text"]
-        assert "Оплатить 632 ₽" in _buttons(paywall["keyboard"])
+        assert "Оплатить в рублях 632 ₽" in _buttons(paywall["keyboard"])
         assert "Убрать промокод" in _buttons(paywall["keyboard"])
 
         await app.db.close()

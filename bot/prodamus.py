@@ -128,6 +128,7 @@ class Notification:
     order_id: str | None = None
     tg_id: int | None = None
     amount: int | None = None
+    currency: str | None = None
     phone: str | None = None
     email: str | None = None
     is_subscription: bool = False
@@ -236,6 +237,31 @@ class ProdamusClient:
 
         return self.settings.prodamus_form_url + "?" + urlencode(list(_flatten(data)))
 
+    def foreign_payment_url(self, tg_id: int, order_id: str) -> str | None:
+        """Бессрочная ссылка Prodamus: счёт в рублях, платёж в валюте по курсу банка.
+
+        Ссылку создаёт Марина в кабинете (PRODAMUS_FOREIGN_URL). Мы только
+        добавляем к ней свои параметры, чтобы узнать человека по уведомлению.
+        """
+        base = self.settings.prodamus_foreign_url
+        if not base:
+            return None
+        data: dict[str, Any] = {
+            "do": "pay",
+            "order_id": order_id,
+            "customer_extra": f"tg:{tg_id}",
+        }
+        if self.settings.prodamus_send_tg_user_id:
+            data["tg_user_id"] = str(tg_id)
+        if self.settings.prodamus_url_success:
+            data["urlSuccess"] = self.settings.prodamus_url_success
+        if self.settings.prodamus_url_return:
+            data["urlReturn"] = self.settings.prodamus_url_return
+        if self.settings.prodamus_sign_links:
+            data["signature"] = sign_payload(data, self.settings.prodamus_secret)
+        separator = "&" if "?" in base else "?"
+        return base + separator + urlencode(list(_flatten(data)))
+
     # -------------------------------------------------------------- проверка
 
     def verify(self, payload: dict, signature: str | None) -> bool:
@@ -340,6 +366,7 @@ class ProdamusClient:
             order_id=order_id,
             tg_id=tg_id,
             amount=amount,
+            currency=(str(_first(data, "currency", "currency_code") or "") or None),
             phone=_first(data, "customer_phone"),
             email=_first(data, "customer_email"),
             is_subscription=bool(subscription_id),

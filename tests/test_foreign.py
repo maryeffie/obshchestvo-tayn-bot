@@ -1,4 +1,4 @@
-"""Оплата в валюте: разовый счёт для покупателей из других стран."""
+"""Оплата из-за рубежа: бессрочная ссылка с конвертацией валюты."""
 
 from __future__ import annotations
 
@@ -16,40 +16,33 @@ def _params(url: str) -> dict[str, str]:
     return {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
 
 
-def test_paywall_offers_other_country_and_builds_currency_link() -> None:
+def test_paywall_offers_other_currency_with_universal_link() -> None:
     async def scenario() -> None:
         app = await make_app()
         await app.db.upsert_user(801, "anna", "Анна")
         router = user_handlers.build_router(app)  # type: ignore[arg-type]
 
-        # 1. на странице оплаты есть кнопка для другой страны
+        # 1. на странице оплаты — кнопка «в другой валюте»
         message = FakeMessage("/start", user_id=801)
         await _handler(router, "message", "cmd_start")(message, FakeState())
         await _handler(router, "callback_query", "cb_join")(
             FakeCallback("join", message, user_id=801), FakeState()
         )
         paywall = message.answers[-1]
-        assert "Оплатить из другой страны" in buttons_of(paywall["keyboard"])
+        assert "Оплатить в рублях 790 ₽" in buttons_of(paywall["keyboard"])
+        assert "Оплатить в другой валюте" in buttons_of(paywall["keyboard"])
 
-        # 2. меню валют
+        # 2. кнопка ведёт на бессрочную ссылку Prodamus
         call = FakeCallback("cur:menu", FakeMessage(user_id=801), user_id=801)
         await _handler(router, "callback_query", "cb_currency_menu")(call)
-        menu = call.message.answers[-1]
-        assert "Оплата из другой страны" in menu["text"]
-        labels = buttons_of(menu["keyboard"])
-        assert "Евро — 9 €" in labels
-        assert "Доллары — 10 $" in labels
-
-        # 3. ссылка в евро: разовая, валюта eur, без подписки
-        pick = FakeCallback("cur:pay:eur", FakeMessage(user_id=801), user_id=801)
-        await _handler(router, "callback_query", "cb_currency_pay")(pick)
-        sent = pick.message.answers[-1]
-        assert "9 €" in sent["text"]
-        url = sent["keyboard"].inline_keyboard[0][0].url
-        params = _params(url)
-        assert params["currency"] == "eur"
-        assert "subscription" not in params
-        assert "9" in params["products[0][price]"] or "9" in str(params)
+        sent = call.message.answers[-1]
+        assert "Тайны не знают границ" in sent["text"]
+        url_button = sent["keyboard"].inline_keyboard[0][0]
+        assert url_button.url.startswith("https://payform.ru/nqd02rT/?")
+        params = _params(url_button.url)
+        assert params["customer_extra"] == "tg:801"      # по нему найдём человека
+        assert params["order_id"].startswith("tg801-")
+        assert "subscription" not in params              # разовый платёж, без автосписания
 
         await app.db.close()
 
@@ -60,15 +53,17 @@ def test_foreign_payment_grants_month_without_autorenew() -> None:
     async def scenario() -> None:
         app = await make_app()
         await app.db.upsert_user(802, "john", "John")
-        url, amount, order_id = await app.payments.create_foreign_link(802, "usd")
-        assert amount == 10
+        url, amount, order_id, currency = await app.payments.create_foreign_link(802)
+        assert currency == "rub" and amount == 790
+        assert "payform.ru/nqd02rT" in url
 
+        # Prodamus присылает платёж в валюте плательщика — 9 евро
         result = await app.payments.handle(
             {
                 "order_id": order_id,
                 "payment_status": "success",
-                "sum": "10",
-                "currency": "usd",
+                "sum": "9",
+                "currency": "eur",
                 "customer_extra": "tg:802",
             }
         )
@@ -77,21 +72,20 @@ def test_foreign_payment_grants_month_without_autorenew() -> None:
         user = await app.db.get_user(802)
         assert is_active(user)
         assert int(user["auto_renew"]) == 0          # автопродления нет
-        assert user["last_currency"] == "usd"
+        assert user["last_currency"] == "eur"
         until = from_iso(user["paid_until"])
         assert 29 <= (until - utcnow()).days <= 30
         assert len(app.bot.invites) == 2
 
-        # админу показали сумму в валюте, а в статистике остались рубли
-        admin_text = app.bot.last_to(111)["text"]
-        assert "10 $" in admin_text
+        # админу показали валюту, в статистике остались рубли
+        assert "9 €" in app.bot.last_to(111)["text"]
         stats = await app.db.stats()
         assert stats["revenue_total"] == 790
 
-        # продление предлагается в той же валюте
+        # продление — снова та же бессрочная ссылка в валюте
         renew_url, renew_amount, _order, renew_currency = await app.payments.create_link_auto(802)
-        assert renew_currency == "usd" and renew_amount == 10
-        assert _params(renew_url)["currency"] == "usd"
+        assert "payform.ru/nqd02rT" in renew_url
+        assert renew_amount == 790 and renew_currency == "rub"
 
         await app.db.close()
 
