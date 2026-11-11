@@ -62,15 +62,50 @@ class PaymentProcessor:
         url = self.prodamus.payment_url(tg_id, order_id, self.settings.price, discount)
         return url, amount, order_id, discount
 
+    async def create_foreign_link(self, tg_id: int, currency: str) -> tuple[str, int, str]:
+        """Разовая оплата в валюте — для покупателей из других стран.
+
+        Подписка (автосписание) в Prodamus возможна только в рублях и только
+        по картам РФ, поэтому иностранцам выдаём разовый счёт на месяц.
+        """
+        currency = currency.lower()
+        amount = self.settings.foreign_prices.get(currency)
+        if not amount:
+            raise ValueError(f"Валюта {currency} не настроена")
+        order_id = self.new_order_id(tg_id)
+        await self.db.create_order(
+            order_id=order_id,
+            tg_id=tg_id,
+            amount=amount,
+            is_recurring=False,
+            currency=currency,
+        )
+        url = self.prodamus.payment_url(tg_id, order_id, amount, currency=currency)
+        return url, amount, order_id
+
+    async def create_link_auto(self, tg_id: int) -> tuple[str, int, str, str]:
+        """Ссылка для «Продлить»: в валюте прошлой оплаты, если она была не в рублях."""
+        user = await self.db.get_user(tg_id) or {}
+        currency = str(user.get("last_currency") or "rub").lower()
+        if currency != "rub" and currency in self.settings.foreign_prices:
+            url, amount, order_id = await self.create_foreign_link(tg_id, currency)
+            return url, amount, order_id, currency
+        url, amount, order_id, _discount = await self.create_payment_link(tg_id)
+        return url, amount, order_id, "rub"
+
     # ------------------------------------------------------------ обработка вебхука
 
     async def handle(self, data: dict) -> str:
         """Обрабатывает уведомление Prodamus. Возвращает метку результата для логов."""
         note = self.prodamus.parse(data)
+        order = await self.db.get_order(note.order_id) if note.order_id else None
+        order_currency = str((order or {}).get("currency") or "rub").lower()
+        # в статистике всё считаем в рублях: один оплаченный месяц = цена подписки
+        stats_amount = note.amount if order_currency == "rub" else self.settings.price
         await self.db.add_payment(
             order_id=note.order_id,
             tg_id=note.tg_id,
-            amount=note.amount,
+            amount=stats_amount,
             kind=note.kind,
             is_renewal=note.is_renewal,
             status_text=note.status_text,
@@ -93,7 +128,6 @@ class PaymentProcessor:
             )
             return "unknown-user"
 
-        order = await self.db.get_order(note.order_id) if note.order_id else None
         user = await self.db.get_user(tg_id)
         if user is None:
             user = await self.db.upsert_user(tg_id)
@@ -140,12 +174,16 @@ class PaymentProcessor:
             paid_until = now + timedelta(days=self.settings.subscription_days)
 
         await self.db.activate(tg_id, paid_until, source="prodamus", paid_at=now)
+        if order_currency != "rub":
+            # оплата в валюте — разовая: автопродления нет, продление вручную
+            await self.db.set_auto_renew(tg_id, False)
+            await self.db.set_last_currency(tg_id, order_currency)
         if order is not None:
             await self.db.set_order_status(order["order_id"], "paid")
             if order.get("promo_code"):
                 await self.db.use_promo(order["promo_code"])
 
-        amount = note.amount or (order["amount"] if order else self.settings.price)
+        paid_amount = note.amount or (order["amount"] if order else self.settings.price)
         if is_renewal:
             await self.access.send_renewed(tg_id, paid_until)
         else:
@@ -153,7 +191,8 @@ class PaymentProcessor:
 
         await self.access.notify_payment(
             tg_id,
-            amount,
+            paid_amount,
+            currency=order_currency,
             renewal=is_renewal,
             promo_code=(order or {}).get("promo_code"),
             username=(user or {}).get("username"),
@@ -161,7 +200,7 @@ class PaymentProcessor:
         log.info(
             "Оплата засчитана: tg_id=%s, %s, продление=%s, доступ до %s",
             tg_id,
-            fmt_price(amount, self.settings.currency),
+            fmt_price(paid_amount, order_currency),
             is_renewal,
             paid_until.isoformat(),
         )

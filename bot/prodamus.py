@@ -178,6 +178,7 @@ class ProdamusClient:
         order_id: str,
         base_amount: int,
         discount: int = 0,
+        currency: str | None = None,
     ) -> str:
         """Формирует ссылку на платёжную форму.
 
@@ -186,12 +187,18 @@ class ProdamusClient:
         подставляется в products.
         """
         discount = max(0, min(discount, base_amount))
+        currency = (currency or self.settings.currency or "rub").lower()
+        # подписка в Prodamus бывает только в рублях, поэтому оплата в валюте —
+        # всегда разовая, без параметра subscription
+        foreign = currency != "rub"
         data: dict[str, Any] = {
             "do": "pay",
             "order_id": order_id,
             # страховка: даже если order_id потеряется, по этому полю найдём человека
             "customer_extra": f"tg:{tg_id}",
         }
+        if foreign:
+            data["currency"] = currency
         if self.settings.prodamus_sys:
             data["sys"] = self.settings.prodamus_sys
         if self.settings.prodamus_send_tg_user_id:
@@ -202,7 +209,7 @@ class ProdamusClient:
         if self.settings.prodamus_url_return:
             data["urlReturn"] = self.settings.prodamus_url_return
 
-        if self.settings.is_recurrent:
+        if self.settings.is_recurrent and not foreign:
             data["subscription"] = str(self.settings.prodamus_subscription_id)
             if discount:
                 data["discount_value"] = str(discount)

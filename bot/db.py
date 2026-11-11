@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS users (
     reminder_stage    INTEGER NOT NULL DEFAULT 0,    -- 0 нет / 1 за N дней / 2 в день окончания / 3 после
     access_source     TEXT,                          -- prodamus | manual | promo
     auto_renew        INTEGER NOT NULL DEFAULT 1,    -- 1 = автопродление включено
+    last_currency     TEXT,                          -- валюта прошлой оплаты (eur/usd/byn)
     cancelled_at      TEXT,                          -- когда пользователь отменил подписку
     phone             TEXT,
     email             TEXT,
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS orders (
     promo_code   TEXT,
     status       TEXT NOT NULL DEFAULT 'pending',    -- pending | paid | failed | cancelled
     is_recurring INTEGER NOT NULL DEFAULT 0,
+    currency     TEXT NOT NULL DEFAULT 'rub',         -- валюта счёта (подписка — только rub)
     created_at   TEXT NOT NULL,
     paid_at      TEXT
 );
@@ -110,10 +112,18 @@ class Database:
             "reminder_stage": (
                 "ALTER TABLE users ADD COLUMN reminder_stage INTEGER NOT NULL DEFAULT 0"
             ),
+            "last_currency": "ALTER TABLE users ADD COLUMN last_currency TEXT",
         }
         for column, sql in additions.items():
             if column not in columns:
                 await self.conn.execute(sql)
+
+        async with self.conn.execute("PRAGMA table_info(orders)") as cur:
+            order_columns = {row[1] for row in await cur.fetchall()}
+        if "currency" not in order_columns:
+            await self.conn.execute(
+                "ALTER TABLE orders ADD COLUMN currency TEXT NOT NULL DEFAULT 'rub'"
+            )
         await self.conn.commit()
 
     async def close(self) -> None:
@@ -244,6 +254,13 @@ class Database:
             (status, now_iso(), tg_id),
         )
 
+    async def set_last_currency(self, tg_id: int, currency: str) -> None:
+        """Запоминаем валюту оплаты: по ней бот предложит продление."""
+        await self._write(
+            "UPDATE users SET last_currency = ?, updated_at = ? WHERE tg_id = ?",
+            (currency.lower(), now_iso(), tg_id),
+        )
+
     async def set_auto_renew(self, tg_id: int, value: bool, cancelled: bool = False) -> None:
         """value=False — автосписание отключено (пользователь или админ)."""
         await self._write(
@@ -323,13 +340,23 @@ class Database:
         amount: int,
         promo_code: str | None = None,
         is_recurring: bool = False,
+        currency: str = "rub",
     ) -> None:
         await self._write(
             """
-            INSERT INTO orders (order_id, tg_id, amount, promo_code, is_recurring, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO orders
+                (order_id, tg_id, amount, promo_code, is_recurring, currency, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (order_id, tg_id, amount, promo_code, int(is_recurring), now_iso()),
+            (
+                order_id,
+                tg_id,
+                amount,
+                promo_code,
+                int(is_recurring),
+                currency.lower(),
+                now_iso(),
+            ),
         )
 
     async def get_order(self, order_id: str) -> dict | None:

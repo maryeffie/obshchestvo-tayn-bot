@@ -23,6 +23,7 @@ from ..keyboards import (
 )
 from ..utils import (
     fmt_date,
+    from_iso,
     fmt_datetime,
     fmt_price,
     human_username,
@@ -92,6 +93,48 @@ def build_router(app: App) -> Router:
     async def cmd_chatid(message: Message) -> None:
         await message.answer(
             f"chat_id: <code>{message.chat.id}</code>\nтип чата: {message.chat.type}"
+        )
+
+    @router.message(Command("testpay"), is_admin)
+    async def cmd_testpay(message: Message) -> None:
+        """Прогон цепочки «оплата → доступ» без Prodamus. Только для админа.
+
+        Нужен, чтобы проверить выдачу ссылок и уведомления, когда касса молчит.
+        """
+        if message.from_user is None:
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        target = parts[1].strip() if len(parts) > 1 else ""
+        if target and not target.isdigit():
+            await message.answer(
+                "Формат: <code>/testpay</code> — проверить на себе,\n"
+                "или <code>/testpay 123456789</code> — на конкретном ID."
+            )
+            return
+        tg_id = int(target) if target else message.from_user.id
+        await db.upsert_user(tg_id)
+        order_id = payments.new_order_id(tg_id)
+        result = await payments.handle(
+            {
+                "order_id": order_id,
+                "payment_status": "success",
+                "payment_status_description": "Тестовая оплата из бота",
+                "sum": str(settings.price),
+                "customer_extra": str(tg_id),
+                "notification_code": "test",
+            }
+        )
+        user = await db.get_user(tg_id)
+        paid_until = from_iso(user.get("paid_until")) if user else None
+        await message.answer(
+            "🧪 <b>Тестовая оплата прогнана</b>\n\n"
+            f"Результат: <code>{result}</code>\n"
+            f"ID участника: <code>{tg_id}</code>\n"
+            f"Сумма: {fmt_price(settings.price, settings.currency)}\n"
+            f"Доступ до: {fmt_date(paid_until, settings.timezone)}\n\n"
+            "Если участник получил сообщение со ссылками — цепочка выдачи работает. "
+            "Значит, дело только в уведомлениях Prodamus.",
+            reply_markup=back_to_panel_kb(),
         )
 
     @router.message(Command("stats"), is_admin)
@@ -181,6 +224,33 @@ def build_router(app: App) -> Router:
                 ),
                 reply_markup=back_to_panel_kb(),
             )
+
+    @router.callback_query(F.data.startswith("adm:quickgrant:"), is_admin)
+    async def cb_quick_grant(call: CallbackQuery) -> None:
+        """Выдача доступа по кнопке из уведомления «Я оплатил»."""
+        if call.data is None:
+            return
+        try:
+            tg_id = int(call.data.rsplit(":", 1)[1])
+        except (IndexError, ValueError):
+            await call.answer("Не понял, кому выдавать доступ", show_alert=True)
+            return
+        await call.answer("Выдаю доступ…")
+        await db.upsert_user(tg_id)
+        ok, paid_until, error = await payments.grant_manually(
+            tg_id, settings.subscription_days
+        )
+        user = await db.get_user(tg_id)
+        name = human_username(user) if user else tg_id
+        text = (
+            texts.PAID_CLAIM_GRANTED.format(
+                user=name, date=fmt_date(paid_until, settings.timezone)
+            )
+            if ok
+            else texts.PAID_CLAIM_GRANT_FAILED.format(user=name, error=error)
+        )
+        if call.message is not None:
+            await call.message.answer(text, reply_markup=back_to_panel_kb())
 
     # ---------------------------------------------------------- отзыв доступа
 

@@ -18,9 +18,61 @@ def welcome_kb() -> InlineKeyboardMarkup:
     )
 
 
-def paywall_kb(pay_url: str, price_label: str) -> InlineKeyboardMarkup:
+# валюты разовой оплаты: код -> (флаг, название, как называть в тексте)
+CURRENCY_META: dict[str, tuple[str, str, str]] = {
+    "eur": ("🇪🇺", "Евро", "евро"),
+    "usd": ("🇺🇸", "Доллары", "долларах США"),
+    "byn": ("🇧🇾", "Бел. рубли", "белорусских рублях"),
+}
+
+
+def currency_options(prices: dict[str, int], fmt) -> list[tuple[str, str]]:
+    """Список кнопок выбора валюты: [(код, подпись), ...]."""
+    options: list[tuple[str, str]] = []
+    for code, price in prices.items():
+        flag, name, _ = CURRENCY_META.get(code, ("💳", code.upper(), code))
+        options.append((f"cur:pay:{code}", f"{flag} {name} — {fmt(price, code)}"))
+    return options
+
+
+def paywall_kb(
+    pay_url: str, price_label: str, *, with_foreign: bool = False
+) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=f"💳 Оплатить {price_label}", url=pay_url)],
+        [InlineKeyboardButton(text="✅ Я оплатил — проверить", callback_data="paid:notify")],
+    ]
+    if with_foreign:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🌍 Оплатить из другой страны", callback_data="cur:menu"
+                )
+            ]
+        )
+    return _kb(*rows)
+
+
+def currency_kb(options: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Выбор валюты для разовой оплаты."""
     return _kb(
-        [InlineKeyboardButton(text=f"💳 Оплатить {price_label}", url=pay_url)]
+        *[[InlineKeyboardButton(text=label, callback_data=data)] for data, label in options],
+        [InlineKeyboardButton(text="↩️ Назад", callback_data="join")],
+    )
+
+
+def foreign_pay_kb(pay_url: str) -> InlineKeyboardMarkup:
+    return _kb(
+        [InlineKeyboardButton(text="💳 Перейти к оплате", url=pay_url)],
+        [InlineKeyboardButton(text="📅 Моя подписка", callback_data="status")],
+    )
+
+
+def quick_grant_kb(tg_id: int) -> InlineKeyboardMarkup:
+    """Кнопка админу: выдать доступ человеку, который сообщил об оплате."""
+    return _kb(
+        [InlineKeyboardButton(text="🎁 Выдать доступ на 30 дней", callback_data=f"adm:quickgrant:{tg_id}")],
+        [InlineKeyboardButton(text="📅 Моя подписка", callback_data="status")],
     )
 
 

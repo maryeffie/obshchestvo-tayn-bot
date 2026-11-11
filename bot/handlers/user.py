@@ -8,20 +8,26 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, Message
 
 from .. import texts
 from ..app import App
 from ..keyboards import (
+    CURRENCY_META,
     cancel_confirm_kb,
+    currency_kb,
+    currency_options,
+    foreign_pay_kb,
     member_kb,
     paywall_kb,
     paywall_kb_with_promo_reset,
     promo_cancel_kb,
+    quick_grant_kb,
     return_kb,
     welcome_kb,
 )
-from ..utils import fmt_date, fmt_price, from_iso, is_active
+from ..utils import fmt_date, fmt_price, from_iso, human_username, is_active
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +39,7 @@ class PromoStates(StatesGroup):
 def build_router(app: App) -> Router:
     router = Router(name="user")
     settings = app.settings
+    bot = app.bot
     db = app.db
     access = app.access
     payments = app.payments
@@ -56,7 +63,9 @@ def build_router(app: App) -> Router:
             keyboard = paywall_kb_with_promo_reset(url, amount_label)
         else:
             text = texts.BEFORE_PAYMENT.format(price=price_label)
-            keyboard = paywall_kb(url, amount_label)
+            keyboard = paywall_kb(
+                url, amount_label, with_foreign=bool(settings.foreign_prices)
+            )
         await message.answer(text, reply_markup=keyboard, disable_web_page_preview=True)
 
     def can_cancel(user: dict | None) -> bool:
@@ -98,6 +107,45 @@ def build_router(app: App) -> Router:
             await message.answer(
                 texts.STATUS_NEW.format(price=price_label), reply_markup=welcome_kb()
             )
+
+    @router.callback_query(F.data == "cur:menu")
+    async def cb_currency_menu(call: CallbackQuery) -> None:
+        await call.answer()
+        if call.message is None:
+            return
+        options = currency_options(settings.foreign_prices, fmt_price)
+        if not options:
+            await call.message.answer(texts.FOREIGN_UNAVAILABLE)
+            return
+        await call.message.answer(
+            texts.FOREIGN_CHOOSE, reply_markup=currency_kb(options)
+        )
+
+    @router.callback_query(F.data.startswith("cur:pay:"))
+    async def cb_currency_pay(call: CallbackQuery) -> None:
+        if call.data is None or call.message is None or call.from_user is None:
+            return
+        code = call.data.rsplit(":", 1)[1].lower()
+        try:
+            url, amount, _order_id = await payments.create_foreign_link(
+                call.from_user.id, code
+            )
+        except (ValueError, KeyError):
+            await call.answer(texts.FOREIGN_UNAVAILABLE, show_alert=True)
+            return
+        await call.answer()
+        await db.upsert_user(
+            call.from_user.id, call.from_user.username, call.from_user.first_name
+        )
+        await call.message.answer(
+            texts.FOREIGN_PAY.format(
+                currency=CURRENCY_META.get(code, ("", "", code))[2],
+                price=fmt_price(amount, code),
+                days=settings.subscription_days,
+            ),
+            reply_markup=foreign_pay_kb(url),
+            disable_web_page_preview=True,
+        )
 
     async def ensure_user(message: Message) -> dict:
         assert message.from_user is not None
@@ -221,6 +269,32 @@ def build_router(app: App) -> Router:
                 texts.LINKS_ERROR.format(support=settings.support_contact or "администратора")
             )
             log.warning("Не удалось переотправить ссылки %s: %s", call.from_user.id, error)
+
+    # ------------------------------------------------- «Я оплатил» — сигнал админу
+
+    @router.callback_query(F.data == "paid:notify")
+    async def cb_paid_notify(call: CallbackQuery) -> None:
+        if call.from_user is None:
+            return
+        await call.answer("Передали администратору ✅", show_alert=False)
+        tg_id = call.from_user.id
+        user = await db.get_user(tg_id) or await db.upsert_user(
+            tg_id, call.from_user.username, call.from_user.first_name
+        )
+        text = texts.PAID_CLAIM_ADMIN.format(
+            user=human_username(user), tg_id=tg_id, days=settings.subscription_days
+        )
+        for admin_id in settings.admin_ids:
+            try:
+                await bot.send_message(admin_id, text, reply_markup=quick_grant_kb(tg_id))
+            except TelegramAPIError:
+                log.warning("Не удалось уведомить админа %s о заявке на оплату", admin_id)
+        if call.message is not None:
+            await call.message.answer(
+                texts.PAID_CLAIM_USER.format(
+                    support=settings.support_contact or "администратора клуба"
+                )
+            )
 
     # -------------------------------------------------— отмена подписки
 

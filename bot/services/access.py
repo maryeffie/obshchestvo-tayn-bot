@@ -109,6 +109,7 @@ class AccessService:
         paid_until: datetime,
         stage: str = "soon",
         pay_url: str | None = None,
+        price_label: str | None = None,
     ) -> bool:
         """stage: soon — за N дней, today — в день окончания, late — на следующий день.
 
@@ -117,7 +118,7 @@ class AccessService:
         """
         from ..keyboards import renew_kb, renew_url_kb
 
-        price = fmt_price(self.settings.price, self.settings.currency)
+        price = price_label or fmt_price(self.settings.price, self.settings.currency)
         if stage == "today":
             text = texts.RENEWAL_TODAY.format(price=price)
         elif stage == "late":
@@ -202,6 +203,7 @@ class AccessService:
         renewal: bool = False,
         promo_code: str | None = None,
         username: str | None = None,
+        currency: str | None = None,
     ) -> None:
         user = await self.db.get_user(tg_id)
         template = (
@@ -217,7 +219,7 @@ class AccessService:
             template.format(
                 username=username or human_username(user),
                 tg_id=tg_id,
-                amount=fmt_price(amount, self.settings.currency),
+                amount=fmt_price(amount, currency or self.settings.currency),
                 extra=extra,
             )
         )

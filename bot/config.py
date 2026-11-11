@@ -92,6 +92,9 @@ class Settings:
     # Подписка
     price: int
     currency: str
+    price_eur: int | None          # разовая оплата в евро (для покупателей за рубежом)
+    price_usd: int | None
+    price_byn: int | None
     product_name: str
     subscription_days: int
     grace_days: int
@@ -133,6 +136,13 @@ class Settings:
         return user_id is not None and user_id in self.admin_ids
 
 
+    @property
+    def foreign_prices(self) -> dict[str, int]:
+        """Валюты разовой оплаты, которые настроены (и положительны)."""
+        pairs = {"eur": self.price_eur, "usd": self.price_usd, "byn": self.price_byn}
+        return {code: price for code, price in pairs.items() if price and price > 0}
+
+
 def load_settings() -> Settings:
     form_url = _raw("PRODAMUS_FORM_URL", "https://demo.payform.ru/", required=True)
     if not form_url.startswith("http"):
@@ -147,6 +157,9 @@ def load_settings() -> Settings:
         chat_id=_chat_ref("CHAT_ID"),
         price=_int("PRICE", 790),
         currency=(_raw("CURRENCY", "rub") or "rub").lower(),
+        price_eur=_int("PRICE_EUR", 9),
+        price_usd=_int("PRICE_USD", 10),
+        price_byn=_int("PRICE_BYN", 29),
         product_name=_raw("PRODUCT_NAME", "Подписка «Общество тайн» (1 месяц)"),
         subscription_days=_int("SUBSCRIPTION_DAYS", 30),
         grace_days=_int("GRACE_DAYS", 1),

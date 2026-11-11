@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from ..config import Settings
 from ..db import Database
-from ..utils import from_iso, to_iso, utcnow
+from ..utils import fmt_price, from_iso, to_iso, utcnow
 from .access import AccessService
 from .payments import PaymentProcessor
 
@@ -80,9 +80,13 @@ class ScheduledTasks:
                 await self.db.set_reminder_stage(user["tg_id"], stage, user["paid_until"])
                 continue
 
-            pay_url = await self._renewal_url(user["tg_id"])
+            pay_url, price_label = await self._renewal_url(user["tg_id"])
             ok = await self.access.send_reminder(
-                user["tg_id"], paid_until, REMINDER_STAGES[stage - 1], pay_url=pay_url
+                user["tg_id"],
+                paid_until,
+                REMINDER_STAGES[stage - 1],
+                pay_url=pay_url,
+                price_label=price_label,
             )
             # фиксируем факт попытки в любом случае, чтобы не спамить каждые 10 минут
             await self.db.set_reminder_stage(user["tg_id"], stage, user["paid_until"])
@@ -90,16 +94,16 @@ class ScheduledTasks:
                 sent += 1
         return sent
 
-    async def _renewal_url(self, tg_id: int) -> str | None:
-        """Ссылка на оплату для кнопки в напоминании (если сервис оплат доступен)."""
+    async def _renewal_url(self, tg_id: int) -> tuple[str | None, str | None]:
+        """Ссылка и цена для кнопки в напоминании (если сервис оплат доступен)."""
         if self.payments is None:
-            return None
+            return None, None
         try:
-            url, _amount, _order_id, _discount = await self.payments.create_payment_link(tg_id)
-            return url
+            url, amount, _order_id, currency = await self.payments.create_link_auto(tg_id)
+            return url, fmt_price(amount, currency)
         except Exception:  # noqa: BLE001 — напоминание важнее кнопки
             log.exception("Не удалось создать ссылку на оплату для напоминания")
-            return None
+            return None, None
 
     # --------------------------------------- 30 дней + 1 день отсрочки
 
