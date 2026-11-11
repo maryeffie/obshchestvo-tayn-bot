@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from urllib.parse import parse_qs
 
 from aiohttp import web
 
@@ -23,25 +25,69 @@ def create_webhook_app(app: App) -> web.Application:
         content_type = (request.content_type or "").lower()
 
         try:
+            raw = await request.read()
+        except Exception:  # noqa: BLE001
+            raw = b""
+
+        data: dict = {}
+        try:
             if "json" in content_type:
-                payload = await request.json()
-                data = {str(k): v for k, v in payload.items()} if isinstance(payload, dict) else {}
+                payload = json.loads(raw.decode("utf-8", "replace")) if raw else {}
+                data = (
+                    {str(k): v for k, v in payload.items()}
+                    if isinstance(payload, dict)
+                    else {}
+                )
             else:
-                post = await request.post()
-                data = {str(k): v for k, v in post.items() if isinstance(v, str)}
+                parsed = parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True)
+                data = {k: v[0] for k, v in parsed.items()}
         except Exception as exc:  # noqa: BLE001
             log.warning("Не удалось разобрать тело вебхука: %s", exc)
-            return web.Response(status=400, text="error: bad request body")
+            data = {}
 
         if not data:
             log.warning("Вебхук пришёл с пустым телом (content-type=%s)", content_type)
             return web.Response(status=400, text="error: empty body")
 
-        if not app.prodamus.verify_request(data, headers):
-            # 400 — важный сигнал: Prodamus повторит отправку. Если подпись
-            # неверна по сути (не тот секрет / демо-режим), разбираемся вручную.
-            log.error("Вебхук с неверной подписью отклонён. Данные: %s", _short(data))
-            return web.Response(status=400, text="error: signature incorrect")
+        signature = next(
+            (value for key, value in headers.items() if key.lower() == "sign"), None
+        )
+        signature = signature or data.get("signature") or data.get("sign")
+
+        # 1) штатная проверка (нормализованный JSON), 2) по сырому телу запроса
+        verified = app.prodamus.verify_request(data, headers, raw)
+        if not verified and raw:
+            verified = app.prodamus.verify_raw(raw, signature, data)
+
+        if not verified:
+            order_id = str(data.get("order_num") or data.get("order_id") or "")
+            order = await app.db.get_order(order_id) if order_id else None
+            if order is not None and order.get("status") == "pending":
+                # Человек заплатил по нашей ссылке — лучше открыть доступ,
+                # чем оставить его без клуба из-за спора о подписи.
+                log.warning(
+                    "Подпись не сошлась, но заказ %s ждёт оплату — платёж засчитан",
+                    order_id,
+                )
+                asyncio.create_task(_process(app, data))
+                return web.Response(status=200, text="success")
+
+            log.error(
+                "Вебхук с неверной подписью отклонён. content-type=%s, "
+                "заголовки=%s, Sign=%s, тело=%s",
+                content_type,
+                sorted(headers.keys()),
+                (str(signature)[:8] + "…") if signature else "нет",
+                raw[:1200].decode("utf-8", "replace"),
+            )
+            await app.access.notify_admins(
+                "⚠️ <b>Платёж не удалось проверить</b>\n\n"
+                f"Заказ: <code>{order_id or '—'}</code>\n"
+                f"Сумма: {data.get('sum') or '—'}\n"
+                f"Телефон: {data.get('customer_phone') or '—'}\n\n"
+                "Проверьте платёж в кабинете Prodamus и выдайте доступ вручную."
+            )
+            return web.Response(status=200, text="success")
 
         asyncio.create_task(_process(app, data))
         return web.Response(status=200, text="success")

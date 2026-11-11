@@ -127,3 +127,27 @@ def test_demo_signature_rejected() -> None:
     form = {"order_id": "tg5-abc", "payment_status": "success", "sum": "790"}
     demo_signature = sign_payload(form, "secret-key-for-testsdemo")
     assert not client.verify_request(form, {"Sign": demo_signature})
+
+
+def test_webhook_signature_over_raw_body_is_accepted() -> None:
+    """Prodamus подписывает тело как есть — проверка по сырому телу должна проходить."""
+    import hashlib
+    import hmac
+
+    from bot.config import load_settings  # noqa: F401  (для типов)
+    from bot.prodamus import ProdamusClient
+
+    from .helpers import make_settings
+
+    settings = make_settings()
+    client = ProdamusClient(settings)
+    raw = b'{"order_id":"tg1-abc","payment_status":"success","sum":"790"}'
+    signature = hmac.new(
+        settings.prodamus_secret.encode(), raw, hashlib.sha256
+    ).hexdigest()
+
+    data = {"order_id": "tg1-abc", "payment_status": "success", "sum": "790"}
+    assert client.verify_raw(raw, signature, data) is True
+    assert client.verify_raw(raw, signature.upper(), data) is True   # регистр не важен
+    assert client.verify_raw(raw, "deadbeef", data) is False
+    assert client.verify_raw(raw, None, data) is False

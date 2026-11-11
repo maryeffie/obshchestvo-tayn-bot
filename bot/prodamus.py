@@ -274,6 +274,41 @@ class ProdamusClient:
             )
         return False
 
+    def verify_raw(self, raw_body: bytes, signature: str | None, data: dict) -> bool:
+        """Проверка подписи по сырому телу запроса.
+
+        Prodamus подписывает уведомление как есть — без нашей нормализации
+        (сортировки ключей и переформатирования JSON). Поэтому пробуем
+        несколько вариантов: тело целиком, значение поля submit как строку,
+        а также компактный JSON из данных.
+        """
+        if not signature:
+            return False
+        candidates: list[bytes] = [raw_body]
+        submit = data.get("submit")
+        if isinstance(submit, str) and submit:
+            candidates.append(submit.encode("utf-8"))
+        elif isinstance(submit, dict):
+            candidates.append(
+                json.dumps(
+                    submit, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+                ).encode("utf-8")
+            )
+        cleaned = {k: v for k, v in data.items() if k not in {"signature", "sign"}}
+        candidates.append(
+            json.dumps(
+                cleaned, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            ).encode("utf-8")
+        )
+        expected = str(signature).strip().lower()
+        for candidate in candidates:
+            digest = hmac.new(
+                self.settings.prodamus_secret.encode("utf-8"), candidate, hashlib.sha256
+            ).hexdigest()
+            if hmac.compare_digest(digest, expected):
+                return True
+        return False
+
     def verify_request(self, form: dict, headers: dict, raw_body: bytes | None = None) -> bool:
         """Проверяет подпись с учётом разных вариантов тела запроса."""
         signature = _header(headers, "Sign") or form.get("signature") or form.get("sign")

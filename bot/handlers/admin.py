@@ -95,6 +95,34 @@ def build_router(app: App) -> Router:
             f"chat_id: <code>{message.chat.id}</code>\nтип чата: {message.chat.type}"
         )
 
+    @router.message(Command("links"), is_admin)
+    async def cmd_links(message: Message) -> None:
+        """Переотправить участнику свежие ссылки в канал и чат: /links 123456789."""
+        if message.from_user is None:
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        target = parts[1].strip() if len(parts) > 1 else ""
+        if not target.isdigit():
+            await message.answer(
+                "Формат: <code>/links 123456789</code> — ID участника.\n"
+                "Свежие ссылки живут 24 часа и срабатывают один раз."
+            )
+            return
+        tg_id = int(target)
+        ok, error = await access.send_links_again(tg_id)
+        if ok:
+            await message.answer(
+                f"✅ Новые ссылки отправлены участнику <code>{tg_id}</code>.",
+                reply_markup=back_to_panel_kb(),
+            )
+        else:
+            await message.answer(
+                f"⚠️ Не удалось отправить ссылки: <code>{error}</code>\n\n"
+                "Проверьте, что бот — администратор канала и чата с правом "
+                "«Приглашать пользователей».",
+                reply_markup=back_to_panel_kb(),
+            )
+
     @router.message(Command("testpay"), is_admin)
     async def cmd_testpay(message: Message) -> None:
         """Прогон цепочки «оплата → доступ» без Prodamus. Только для админа.

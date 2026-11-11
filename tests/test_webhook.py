@@ -39,16 +39,19 @@ def test_webhook_endpoint() -> None:
             async with session.get(f"{base}/health") as response:
                 assert response.status == 200
 
-            # неверная подпись -> 400, доступ не выдаётся
+            # неверная подпись и незнакомый заказ -> отвечаем 200 (чтобы Prodamus
+            # не ретраил), но доступ не выдаём и предупреждаем админа
             async with session.post(
                 base + app.settings.webhook_path,
-                data=payload,
+                data={**payload, "order_id": "tg999-unknown", "order_num": "tg999-unknown"},
                 headers={"Sign": "deadbeef"},
             ) as response:
-                assert response.status == 400
+                assert response.status == 200
 
             user = await app.db.get_user(777)
             assert user["status"] == "new"
+            assert any("не удалось проверить" in text.lower() for text in app.bot.texts_to(111))
+            app.bot.clear()
 
             # верная подпись -> 200 success
             async with session.post(
