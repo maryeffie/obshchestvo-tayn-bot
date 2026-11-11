@@ -246,19 +246,18 @@ class ProdamusClient:
         base = self.settings.prodamus_foreign_url
         if not base:
             return None
+        # минимум параметров: всё лишнее Prodamus может не принять на бессрочной ссылке
         data: dict[str, Any] = {
-            "do": "pay",
             "order_id": order_id,
             "customer_extra": f"tg:{tg_id}",
         }
-        if self.settings.prodamus_send_tg_user_id:
-            data["tg_user_id"] = str(tg_id)
         if self.settings.prodamus_url_success:
             data["urlSuccess"] = self.settings.prodamus_url_success
         if self.settings.prodamus_url_return:
             data["urlReturn"] = self.settings.prodamus_url_return
-        if self.settings.prodamus_sign_links:
-            data["signature"] = sign_payload(data, self.settings.prodamus_secret)
+        # Подпись сюда НЕ добавляем: на бессрочных ссылках Prodamus проверяет её
+        # по своему алгоритму и отвечает «Ошибка подписи передаваемых данных».
+        # По документации параметр signature для ссылки необязателен.
         separator = "&" if "?" in base else "?"
         return base + separator + urlencode(list(_flatten(data)))
 

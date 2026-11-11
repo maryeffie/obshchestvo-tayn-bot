@@ -45,6 +45,8 @@ def test_paywall_offers_other_currency_with_universal_link() -> None:
         assert "subscription" not in params              # разовый платёж, без автосписания
         # после оплаты Prodamus возвращает человека в чат с ботом
         assert params["urlReturn"] == "https://t.me/society_secrets_bot"
+        # подпись не передаём: на бессрочной ссылке Prodamus её не принимает
+        assert "signature" not in params
 
         # 3. со страницы валюты можно вернуться к выбору способа оплаты
         assert "Назад" in buttons_of(sent["keyboard"])
