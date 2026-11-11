@@ -62,59 +62,36 @@ class PaymentProcessor:
         url = self.prodamus.payment_url(tg_id, order_id, self.settings.price, discount)
         return url, amount, order_id, discount
 
-    async def create_foreign_link(
-        self, tg_id: int, currency: str | None = None
-    ) -> tuple[str, int, str, str]:
+    async def create_foreign_link(self, tg_id: int) -> tuple[str, int, str, str]:
         """Разовая оплата для покупателей из других стран.
 
-        Приоритет — бессрочная ссылка Prodamus с авто-конвертацией: сумма
-        пересчитывается в валюту плательщика по курсу банка. Если она не задана,
-        выставляем счёт в конкретной валюте (eur/usd/byn).
+        Отдаём бессрочную ссылку Prodamus: сумма пересчитывается в валюту
+        плательщика по курсу банка на день оплаты, поэтому своих цен в валюте
+        мы не держим.
 
         Подписка с автосписанием в Prodamus возможна только в рублях и только
         по картам РФ, поэтому для зарубежных платежей — только разовый счёт.
         """
         order_id = self.new_order_id(tg_id)
-        if not currency:
-            url = self.prodamus.foreign_payment_url(tg_id, order_id)
-            if url is None:
-                raise ValueError("Ссылка для оплаты из-за рубежа не настроена")
-            await self.db.create_order(
-                order_id=order_id,
-                tg_id=tg_id,
-                amount=self.settings.price,
-                is_recurring=False,
-                currency="foreign",
-            )
-            return url, self.settings.price, order_id, "rub"
-
-        currency = currency.lower()
-        amount = self.settings.foreign_prices.get(currency)
-        if not amount:
-            raise ValueError(f"Валюта {currency} не настроена")
+        url = self.prodamus.foreign_payment_url(tg_id, order_id)
+        if url is None:
+            raise ValueError("Ссылка для оплаты из-за рубежа не настроена")
         await self.db.create_order(
             order_id=order_id,
             tg_id=tg_id,
-            amount=amount,
+            amount=self.settings.price,
             is_recurring=False,
-            currency=currency,
+            currency="foreign",
         )
-        url = self.prodamus.payment_url(tg_id, order_id, amount, currency=currency)
-        return url, amount, order_id, currency
+        return url, self.settings.price, order_id, "rub"
 
     async def create_link_auto(self, tg_id: int) -> tuple[str, int, str, str]:
         """Ссылка для «Продлить»: та же дорожка, по которой человек платил в прошлый раз."""
         user = await self.db.get_user(tg_id) or {}
         currency = str(user.get("last_currency") or "rub").lower()
         if currency != "rub":
-            # приоритет — бессрочная ссылка с конвертацией, если она настроена
-            specific = (
-                None
-                if self.settings.prodamus_foreign_url
-                else (currency if currency in self.settings.foreign_prices else None)
-            )
             try:
-                return await self.create_foreign_link(tg_id, specific)
+                return await self.create_foreign_link(tg_id)
             except ValueError:
                 log.warning("Не удалось собрать зарубежную ссылку, отдаю рублёвую")
         url, amount, order_id, _discount = await self.create_payment_link(tg_id)

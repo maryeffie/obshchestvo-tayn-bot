@@ -14,10 +14,7 @@ from aiogram.types import CallbackQuery, Message
 from .. import texts
 from ..app import App
 from ..keyboards import (
-    CURRENCY_META,
     cancel_confirm_kb,
-    currency_kb,
-    currency_options,
     foreign_pay_kb,
     member_kb,
     paywall_kb,
@@ -66,9 +63,7 @@ def build_router(app: App) -> Router:
             keyboard = paywall_kb(
                 url,
                 amount_label,
-                with_foreign=bool(
-                    settings.prodamus_foreign_url or settings.foreign_prices
-                ),
+                with_foreign=bool(settings.prodamus_foreign_url),
             )
         await message.answer(text, reply_markup=keyboard, disable_web_page_preview=True)
 
@@ -119,46 +114,15 @@ def build_router(app: App) -> Router:
             return
         text = texts.FOREIGN_CHOOSE.format(days=settings.subscription_days)
         try:
-            # основная дорожка: бессрочная ссылка Prodamus с конвертацией валюты
+            # бессрочная ссылка Prodamus: валюта и сумма считаются на её стороне
             url, _amount, _order_id, _currency = await payments.create_foreign_link(
                 call.from_user.id
             )
         except ValueError:
-            # запасная: отдельный счёт в конкретной валюте
-            options = currency_options(settings.foreign_prices, fmt_price)
-            if not options:
-                await call.message.answer(texts.FOREIGN_UNAVAILABLE)
-                return
-            await call.message.answer(text, reply_markup=currency_kb(options))
+            await call.message.answer(texts.FOREIGN_UNAVAILABLE)
             return
         await call.message.answer(
             text, reply_markup=foreign_pay_kb(url), disable_web_page_preview=True
-        )
-
-    @router.callback_query(F.data.startswith("cur:pay:"))
-    async def cb_currency_pay(call: CallbackQuery) -> None:
-        if call.data is None or call.message is None or call.from_user is None:
-            return
-        code = call.data.rsplit(":", 1)[1].lower()
-        try:
-            url, amount, _order_id, _currency = await payments.create_foreign_link(
-                call.from_user.id, code
-            )
-        except (ValueError, KeyError):
-            await call.answer(texts.FOREIGN_UNAVAILABLE, show_alert=True)
-            return
-        await call.answer()
-        await db.upsert_user(
-            call.from_user.id, call.from_user.username, call.from_user.first_name
-        )
-        await call.message.answer(
-            texts.FOREIGN_PAY.format(
-                currency=CURRENCY_META.get(code, ("", "", code))[2],
-                price=fmt_price(amount, code),
-                days=settings.subscription_days,
-            ),
-            reply_markup=foreign_pay_kb(url),
-            disable_web_page_preview=True,
         )
 
     async def ensure_user(message: Message) -> dict:

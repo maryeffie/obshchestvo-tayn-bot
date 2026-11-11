@@ -18,22 +18,7 @@ def welcome_kb() -> InlineKeyboardMarkup:
     )
 
 
-# валюты разовой оплаты: код -> (флаг, название, как называть в тексте)
-CURRENCY_META: dict[str, tuple[str, str, str]] = {
-    "eur": ("🇪🇺", "Евро", "евро"),
-    "usd": ("🇺🇸", "Доллары", "долларах США"),
-    "byn": ("🇧🇾", "Бел. рубли", "белорусских рублях"),
-}
-
-
-def currency_options(prices: dict[str, int], fmt) -> list[tuple[str, str]]:
-    """Список кнопок выбора валюты: [(код, подпись), ...]."""
-    options: list[tuple[str, str]] = []
-    for code, price in prices.items():
-        flag, name, _ = CURRENCY_META.get(code, ("💳", code.upper(), code))
-        options.append((f"cur:pay:{code}", f"{flag} {name} — {fmt(price, code)}"))
-    return options
-
+# ----------------------------------------------------------- страница оплаты
 
 def paywall_kb(
     pay_url: str, price_label: str, *, with_foreign: bool = False
@@ -55,12 +40,6 @@ def paywall_kb(
     return _kb(*rows)
 
 
-def currency_kb(options: list[tuple[str, str]]) -> InlineKeyboardMarkup:
-    """Выбор валюты для разовой оплаты."""
-    return _kb(
-        *[[InlineKeyboardButton(text=label, callback_data=data)] for data, label in options],
-        [InlineKeyboardButton(text="↩️ Назад", callback_data="join")],
-    )
 
 
 def foreign_pay_kb(pay_url: str) -> InlineKeyboardMarkup:
