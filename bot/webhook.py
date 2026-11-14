@@ -10,6 +10,7 @@ from urllib.parse import parse_qs
 from aiohttp import web
 
 from .app import App
+from .keyboards import quick_grant_kb
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,15 @@ def create_webhook_app(app: App) -> web.Application:
             log.warning("Вебхук пришёл с пустым телом (content-type=%s)", content_type)
             return web.Response(status=400, text="error: empty body")
 
+        # необязательный общий секрет в адресе: ?token=... (см. WEBHOOK_TOKEN)
+        expected_token = app.settings.webhook_token
+        token_ok = True
+        if expected_token:
+            token_ok = request.query.get("token") == expected_token
+        if not token_ok:
+            log.error("Вебхук без верного token — отклонён")
+            return web.Response(status=403, text="error: forbidden")
+
         signature = next(
             (value for key, value in headers.items() if key.lower() == "sign"), None
         )
@@ -59,40 +69,47 @@ def create_webhook_app(app: App) -> web.Application:
         if not verified and raw:
             verified = app.prodamus.verify_raw(raw, signature, data)
 
-        if not verified:
+        if not verified and not (expected_token and token_ok):
+            # Подпись не сошлась, а секретного token нет: автоматически засчитывать
+            # нельзя — такую ссылку легко подделать. Отдаём админу кнопку в один клик.
             order_id = str(data.get("order_num") or data.get("order_id") or "")
             order = await app.db.get_order(order_id) if order_id else None
-            amount_matches = bool(
-                order
-                and str(data.get("sum", "")).replace(",", ".").split(".")[0].isdigit()
-                and int(float(str(data.get("sum")).replace(",", "."))) == int(order["amount"])
-            )
-            if order is not None and order.get("status") == "pending" and amount_matches:
-                # Человек заплатил по нашей ссылке — лучше открыть доступ,
-                # чем оставить его без клуба из-за спора о подписи.
-                log.warning(
-                    "Подпись не сошлась, но заказ %s ждёт оплату — платёж засчитан",
-                    order_id,
-                )
-                asyncio.create_task(_process(app, data))
-                return web.Response(status=200, text="success")
-
+            tg_id = int(order["tg_id"]) if order else None
+            if tg_id is None:
+                digits = "".join(ch for ch in str(data.get("customer_extra") or "") if ch.isdigit())
+                if digits:
+                    tg_id = int(digits)
             log.error(
-                "Вебхук с неверной подписью отклонён. content-type=%s, "
-                "заголовки=%s, Sign=%s, тело=%s",
+                "Вебхук с неверной подписью. content-type=%s, заголовки=%s, Sign=%s, тело=%s",
                 content_type,
                 sorted(headers.keys()),
                 (str(signature)[:8] + "…") if signature else "нет",
                 raw[:1200].decode("utf-8", "replace"),
             )
-            await app.access.notify_admins(
-                "⚠️ <b>Платёж не удалось проверить</b>\n\n"
+            text = (
+                "⚠️ <b>Платёж пришёл, но подпись не сошлась</b>\n\n"
                 f"Заказ: <code>{order_id or '—'}</code>\n"
-                f"Сумма: {data.get('sum') or '—'}\n"
+                f"ID участника: <code>{tg_id or '—'}</code>\n"
+                f"Сумма: {data.get('sum') or '—'} {data.get('currency') or ''}\n"
                 f"Телефон: {data.get('customer_phone') or '—'}\n\n"
-                "Проверьте платёж в кабинете Prodamus и выдайте доступ вручную."
+                "Проверьте платёж в кабинете Prodamus. Если деньги пришли — нажмите "
+                "кнопку, доступ откроется сам."
             )
+            for admin_id in app.settings.admin_ids:
+                try:
+                    await app.bot.send_message(
+                        admin_id,
+                        text,
+                        reply_markup=quick_grant_kb(tg_id) if tg_id else None,
+                    )
+                except Exception:  # noqa: BLE001
+                    log.warning("Не удалось предупредить админа %s", admin_id)
             return web.Response(status=200, text="success")
+
+        if not verified:
+            log.warning(
+                "Подпись не сошлась, но адрес содержит верный token — платёж засчитан"
+            )
 
         asyncio.create_task(_process(app, data))
         return web.Response(status=200, text="success")

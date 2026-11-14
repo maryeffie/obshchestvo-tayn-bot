@@ -50,7 +50,7 @@ def test_webhook_endpoint() -> None:
 
             user = await app.db.get_user(777)
             assert user["status"] == "new"
-            assert any("не удалось проверить" in text.lower() for text in app.bot.texts_to(111))
+            assert any("подпись не сошлась" in text.lower() for text in app.bot.texts_to(111))
             app.bot.clear()
 
             # верная подпись -> 200 success

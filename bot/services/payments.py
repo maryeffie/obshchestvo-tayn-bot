@@ -103,6 +103,15 @@ class PaymentProcessor:
         """Обрабатывает уведомление Prodamus. Возвращает метку результата для логов."""
         note = self.prodamus.parse(data)
         order = await self.db.get_order(note.order_id) if note.order_id else None
+        if order is None:
+            # в уведомлении Prodamus order_id — их внутренний номер, наш заказ
+            # приходит в поле order_num
+            for key in ("order_num", "order_id"):
+                candidate = str(data.get(key) or "")
+                if candidate and candidate != note.order_id:
+                    order = await self.db.get_order(candidate)
+                    if order is not None:
+                        break
         order_currency = str((order or {}).get("currency") or "rub").lower()
         paid_currency = (note.currency or "").lower()
         # платёж из-за рубежа: валютный счёт или бессрочная ссылка с конвертацией

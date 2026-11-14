@@ -127,6 +127,7 @@ def make_settings(**overrides) -> Settings:
         webhook_port=8080,
         webhook_path="/prodamus/webhook",
         public_base_url="https://bot.example.com",
+        webhook_token=None,
         db_path=":memory:",
         timezone=__import__("zoneinfo").ZoneInfo("Europe/Moscow"),
         support_contact="@marina",

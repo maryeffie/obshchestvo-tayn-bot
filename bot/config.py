@@ -129,6 +129,7 @@ class Settings:
     webhook_port: int
     webhook_path: str
     public_base_url: str | None
+    webhook_token: str | None
 
     # Прочее
     db_path: str
@@ -185,6 +186,7 @@ def load_settings() -> Settings:
         webhook_port=_int("WEBHOOK_PORT", _int("PORT", 8080)),
         webhook_path=_normalize_path(_raw("WEBHOOK_PATH", "/prodamus/webhook")),
         public_base_url=_raw("PUBLIC_BASE_URL"),
+        webhook_token=_raw("WEBHOOK_TOKEN"),
         db_path=_raw("DB_PATH", "data/club.db"),
         timezone=ZoneInfo(_raw("TZ", "Europe/Moscow")),
         support_contact=_raw("SUPPORT_CONTACT"),

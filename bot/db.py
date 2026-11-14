@@ -359,6 +359,14 @@ class Database:
             ),
         )
 
+    async def find_pending_order(self, tg_id: int) -> dict | None:
+        """Последний неоплаченный заказ участника — для сверки платежа."""
+        return await self._fetchone(
+            "SELECT * FROM orders WHERE tg_id = ? AND status = 'pending' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (tg_id,),
+        )
+
     async def get_order(self, order_id: str) -> dict | None:
         return await self._fetchone("SELECT * FROM orders WHERE order_id = ?", (order_id,))
 
