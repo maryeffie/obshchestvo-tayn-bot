@@ -121,7 +121,30 @@ def test_member_card_has_check_button_and_it_works() -> None:
         await _handler(router, "callback_query", "cb_check")(call)
         text = call.message.answers[-1]["text"]
         assert "разбанен" in text and "отправлены" in text
+        assert "Бан снят" in text
 
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_check_explains_when_user_is_already_inside() -> None:
+    """«Ссылка недействительна» часто значит «ты уже в канале»."""
+
+    async def scenario() -> None:
+        from bot.handlers import admin as admin_handlers
+        from tests.test_handlers import FakeMessage, _handler
+
+        app = await make_app()
+        app.bot.member_status = "creator"  # Марина — владелец канала
+        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+
+        message = FakeMessage("/check 2138023308", user_id=111)
+        await _handler(router, "message", "cmd_check")(message)
+
+        text = message.answers[-1]["text"]
+        assert "уже внутри (владелец канала)" in text
+        assert "вступать не нужно" in text
         await app.db.close()
 
     asyncio.run(scenario())

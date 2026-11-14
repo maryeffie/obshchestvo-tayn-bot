@@ -26,7 +26,7 @@ from ..keyboards import (
     promos_kb,
 )
 from ..prodamus import sign_payload
-from ..services.access import status_ru
+from ..services.access import INSIDE_STATUSES, status_ru
 from ..utils import (
     fmt_date,
     from_iso,
@@ -220,6 +220,12 @@ def build_router(app: App) -> Router:
         """Статусы в канале/чате + разбан + свежие ссылки. Общая для /check и кнопки."""
         statuses = await access.lift_ban(tg_id)  # заодно снимает бан, если он есть
         ok, error = await access.send_links_again(tg_id)
+        if any(s in INSIDE_STATUSES for s in statuses.values()):
+            note = texts.CHECK_NOTE_INSIDE
+        elif any(s.startswith("kicked") for s in statuses.values()):
+            note = texts.CHECK_NOTE_BANNED
+        else:
+            note = ""
         return texts.CHECK_RESULT.format(
             tg_id=tg_id,
             channel=status_ru(statuses.get("channel", "—")),
@@ -227,6 +233,7 @@ def build_router(app: App) -> Router:
             links=texts.CHECK_LINKS_OK
             if ok
             else texts.CHECK_LINKS_FAIL.format(error=error or "неизвестно"),
+            note=note,
         )
 
     @router.callback_query(F.data.startswith("adm:check:"), is_admin)

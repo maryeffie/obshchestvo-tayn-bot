@@ -303,14 +303,17 @@ def _days_word(days: int) -> str:
 
 
 STATUS_RU = {
-    "member": "состоит",
-    "administrator": "администратор",
-    "creator": "владелец",
+    "member": "уже внутри",
+    "administrator": "уже внутри (администратор)",
+    "creator": "уже внутри (владелец канала)",
     "restricted": "ограничен",
-    "left": "вышел сам",
-    "kicked": "заблокирован (выгнан)",
-    "not_member": "не состоит",
+    "left": "вышел сам — ссылка сработает",
+    "kicked": "был заблокирован (выгнан)",
+    "not_member": "не состоит — ссылка сработает",
 }
+
+# статусы, при которых человек уже в чате и ссылка ему не нужна
+INSIDE_STATUSES = {"member", "administrator", "creator", "restricted"}
 
 
 def status_ru(status: str) -> str:
