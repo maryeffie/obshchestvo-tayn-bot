@@ -19,6 +19,7 @@ from ..app import App
 from ..filters import IsAdmin
 from ..keyboards import (
     admin_kb,
+    admins_kb,
     back_to_panel_kb,
     cancel_kb,
     promos_kb,
@@ -50,6 +51,7 @@ class AdminStates(StatesGroup):
     promo_percent = State()
     promo_uses = State()
     promo_days = State()
+    add_admin = State()
 
 
 def _forwarded_user(message: Message):
@@ -194,7 +196,7 @@ def build_router(app: App) -> Router:
         if not target.isdigit():
             await message.answer(
                 "Формат: <code>/links 123456789</code> — ID участника.\n"
-                "Свежие ссылки живут 24 часа и срабатывают один раз."
+                "Свежие ссылки живут 24 часа и открываются несколько раз."
             )
             return
         tg_id = int(target)
@@ -272,6 +274,79 @@ def build_router(app: App) -> Router:
         )
 
     # ----------------------------------------------------------- панель
+
+    # ------------------------------------------------------- администраторы
+
+    async def admins_screen():
+        extra = [a for a in await db.list_admins() if int(a["tg_id"]) not in settings.admin_ids]
+        owners_text = "\n".join(f"• <code>{tg_id}</code>" for tg_id in settings.admin_ids) or "—"
+        if extra:
+            extra_text = "\n".join(
+                "• {} — <code>{}</code>".format(a.get("title") or "без имени", a["tg_id"])
+                for a in extra
+            )
+        else:
+            extra_text = texts.ADMIN_ADMINS_EMPTY
+        text = texts.ADMIN_ADMINS.format(owners=owners_text, extra=extra_text)
+        return text, admins_kb(extra, settings.admin_ids)
+
+    @router.callback_query(F.data == "adm:admins", is_admin)
+    async def cb_admins(call: CallbackQuery) -> None:
+        text, keyboard = await admins_screen()
+        if call.message is not None:
+            await call.message.answer(text, reply_markup=keyboard)
+        await call.answer()
+
+    @router.callback_query(F.data == "adm:admin_add", is_admin)
+    async def cb_admin_add(call: CallbackQuery, state: FSMContext) -> None:
+        await state.set_state(AdminStates.add_admin)
+        if call.message is not None:
+            await call.message.answer(texts.ADMIN_ADD_PROMPT, reply_markup=cancel_kb())
+        await call.answer()
+
+    @router.message(AdminStates.add_admin, is_admin, F.text)
+    async def msg_admin_add(message: Message, state: FSMContext) -> None:
+        tg_id, user = await resolve_target(message)
+        if tg_id is None:
+            await message.answer(texts.ADMIN_ADD_NOT_FOUND, reply_markup=cancel_kb())
+            return
+        user = user or await db.get_user(tg_id)
+        title = None
+        if user:
+            title = user.get("first_name") or user.get("username")
+        elif message.text and not message.text.strip().lstrip("-").isdigit():
+            title = message.text.strip()[:64]
+        await db.add_admin(tg_id, title, message.from_user.id if message.from_user else None)
+        settings.extra_admin_ids.add(tg_id)
+        await state.clear()
+        await message.answer(
+            texts.ADMIN_ADDED.format(
+                who=human_username(user or {"tg_id": tg_id, "username": None})
+            ),
+            reply_markup=admin_kb(),
+        )
+
+    @router.callback_query(F.data.startswith("adm:admin_del:"), is_admin)
+    async def cb_admin_del(call: CallbackQuery) -> None:
+        raw = (call.data or "").split(":")[-1]
+        if not raw.lstrip("-").isdigit():
+            await call.answer("Не понял ID", show_alert=True)
+            return
+        tg_id = int(raw)
+        if tg_id in settings.admin_ids:
+            await call.answer(texts.ADMIN_OWNER_LOCKED, show_alert=True)
+            return
+        await db.remove_admin(tg_id)
+        settings.extra_admin_ids.discard(tg_id)
+        user = await db.get_user(tg_id)
+        await call.answer("Убрали ✅", show_alert=False)
+        if call.message is not None:
+            await call.message.answer(
+                texts.ADMIN_DELETED.format(
+                    who=human_username(user or {"tg_id": tg_id, "username": None})
+                ),
+                reply_markup=back_to_panel_kb(),
+            )
 
     @router.callback_query(F.data == "adm:panel", is_admin)
     async def cb_panel(call: CallbackQuery, state: FSMContext) -> None:

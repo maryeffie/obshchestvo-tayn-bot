@@ -71,6 +71,13 @@ CREATE TABLE IF NOT EXISTS counters (
     value INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS admins (
+    tg_id     INTEGER PRIMARY KEY,
+    title     TEXT,
+    added_by  INTEGER,
+    added_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS promos (
     code             TEXT PRIMARY KEY COLLATE NOCASE,
     discount_percent INTEGER NOT NULL DEFAULT 0,     -- скидка в процентах от цены
@@ -156,6 +163,33 @@ class Database:
         async with self.conn.execute(sql, tuple(params)) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    # -------------------------------------------------------------------- admins
+
+    async def list_admins(self) -> list[dict]:
+        return await self._fetchall(
+            "SELECT tg_id, title, added_by, added_at FROM admins ORDER BY added_at"
+        )
+
+    async def add_admin(
+        self, tg_id: int, title: str | None = None, added_by: int | None = None
+    ) -> None:
+        await self._write(
+            """
+            INSERT INTO admins (tg_id, title, added_by, added_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(tg_id) DO UPDATE SET
+                title = COALESCE(excluded.title, admins.title)
+            """,
+            (tg_id, title, added_by, now_iso()),
+        )
+
+    async def remove_admin(self, tg_id: int) -> None:
+        await self._write("DELETE FROM admins WHERE tg_id = ?", (tg_id,))
+
+    async def extra_admin_ids(self) -> set[int]:
+        rows = await self._fetchall("SELECT tg_id FROM admins")
+        return {int(row["tg_id"]) for row in rows}
 
     # --------------------------------------------------------------------- users
 

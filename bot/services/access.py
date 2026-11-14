@@ -43,12 +43,18 @@ class AccessService:
     # ------------------------------------------------------------------ ссылки
 
     async def create_invite_link(self, chat_id: int | str) -> str:
-        """Одноразовая ссылка: 1 переход, живёт 24 часа."""
+        """Личная ссылка: несколько входов (по умолчанию 3), живёт 24 часа.
+
+        Лимит входов > 1 нужен из-за телефона + компьютера и повторного клика:
+        при лимите 1 Telegram показывает «ссылка недействительна» уже на втором
+        нажатии, и оплативший человек остаётся без доступа.
+        """
         expire_date = int(time.time()) + self.settings.invite_link_ttl_hours * 3600
+        limit = self.settings.invite_link_uses
         link = await self.bot.create_chat_invite_link(
             chat_id=chat_id,
             name=f"club-{int(time.time())}",
-            member_limit=1,
+            member_limit=limit if limit > 0 else None,
             expire_date=expire_date,
         )
         return link.invite_link
@@ -192,7 +198,7 @@ class AccessService:
     # ------------------------------------------------------------- уведомления
 
     async def notify_admins(self, text: str, keyboard: InlineKeyboardMarkup | None = None) -> None:
-        for admin_id in self.settings.admin_ids:
+        for admin_id in self.settings.all_admin_ids:
             await self._safe_send(admin_id, text, keyboard)
 
     async def notify_payment(

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -111,6 +111,7 @@ class Settings:
     grace_days: int
     reminder_days_before: int
     invite_link_ttl_hours: int
+    invite_link_uses: int
 
     # Prodamus
     prodamus_form_url: str
@@ -140,6 +141,8 @@ class Settings:
     timezone: ZoneInfo
     support_contact: str | None
     log_level: str
+    # администраторы, добавленные прямо в боте (кнопка «👥 Администраторы»)
+    extra_admin_ids: set[int] = field(default_factory=set)
 
     @property
     def webhook_url(self) -> str:
@@ -150,8 +153,15 @@ class Settings:
     def is_recurrent(self) -> bool:
         return self.prodamus_subscription_id is not None
 
+    @property
+    def all_admin_ids(self) -> tuple[int, ...]:
+        """Главные админы из ADMIN_IDS + добавленные в боте."""
+        return tuple(dict.fromkeys((*self.admin_ids, *sorted(self.extra_admin_ids))))
+
     def is_admin(self, user_id: int | None) -> bool:
-        return user_id is not None and user_id in self.admin_ids
+        if user_id is None:
+            return False
+        return user_id in self.admin_ids or user_id in self.extra_admin_ids
 
 
 
@@ -175,6 +185,7 @@ def load_settings() -> Settings:
         grace_days=_int("GRACE_DAYS", 1),
         reminder_days_before=_int("REMINDER_DAYS_BEFORE", 3),
         invite_link_ttl_hours=_int("INVITE_LINK_TTL_HOURS", 24),
+        invite_link_uses=_int("INVITE_LINK_USES", 3),
         prodamus_form_url=form_url,
         prodamus_secret=_raw("PRODAMUS_SECRET", required=True),
         prodamus_subscription_id=_int("PRODAMUS_SUBSCRIPTION_ID"),

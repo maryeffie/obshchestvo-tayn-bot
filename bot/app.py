@@ -33,6 +33,8 @@ class App:
         db = Database(settings.db_path)
         await db.connect()
         await db.init()
+        # админы, добавленные через кнопку «👥 Администраторы», живут в БД
+        settings.extra_admin_ids.update(await db.extra_admin_ids())
 
         bot = Bot(
             token=settings.bot_token,

@@ -143,6 +143,7 @@ def admin_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🚫 Забрать доступ", callback_data="adm:revoke"),
         ],
         [InlineKeyboardButton(text="👤 Найти участника", callback_data="adm:find")],
+        [InlineKeyboardButton(text="👥 Администраторы", callback_data="adm:admins")],
         [
             InlineKeyboardButton(
                 text="🔁 Отменить автосписание", callback_data="adm:cancel_sub"
@@ -161,6 +162,23 @@ def promos_kb(promos: list[dict]) -> InlineKeyboardMarkup:
                 text=f"⛔ Отключить {promo['code']}",
                 callback_data=f"adm:promo_off:{promo['code']}",
             )
+    builder.button(text="⬅️ Назад", callback_data="adm:panel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def admins_kb(admins: list[dict], owner_ids: tuple[int, ...]) -> InlineKeyboardMarkup:
+    """Список администраторов: главных из ADMIN_IDS убрать нельзя."""
+    builder = InlineKeyboardBuilder()
+    for admin in admins:
+        tg_id = int(admin["tg_id"])
+        title = admin.get("title") or str(tg_id)
+        if tg_id in owner_ids:
+            continue
+        builder.button(
+            text=f"❌ Убрать {title}", callback_data=f"adm:admin_del:{tg_id}"
+        )
+    builder.button(text="➕ Добавить администратора", callback_data="adm:admin_add")
     builder.button(text="⬅️ Назад", callback_data="adm:panel")
     builder.adjust(1)
     return builder.as_markup()

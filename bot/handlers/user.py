@@ -309,7 +309,7 @@ def build_router(app: App) -> Router:
         text = texts.PAID_CLAIM_ADMIN.format(
             user=human_username(user), tg_id=tg_id, days=settings.subscription_days
         )
-        for admin_id in settings.admin_ids:
+        for admin_id in settings.all_admin_ids:
             try:
                 await bot.send_message(admin_id, text, reply_markup=quick_grant_kb(tg_id))
             except TelegramAPIError:

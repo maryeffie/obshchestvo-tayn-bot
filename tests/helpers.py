@@ -114,6 +114,7 @@ def make_settings(**overrides) -> Settings:
         grace_days=1,
         reminder_days_before=3,
         invite_link_ttl_hours=24,
+        invite_link_uses=3,
         prodamus_form_url="https://demo.payform.ru/",
         prodamus_secret="secret-key-for-tests",
         prodamus_subscription_id=4242,

@@ -53,7 +53,9 @@ def test_paid_webhook_grants_access() -> None:
             app.settings.channel_id,
             app.settings.chat_id,
         }
-        assert all(i["member_limit"] == 1 for i in bot.invites)
+        assert all(
+            i["member_limit"] == app.settings.invite_link_uses for i in bot.invites
+        )
         assert all(i["expire_date"] > time.time() + 23 * 3600 for i in bot.invites)
 
         user_texts = bot.texts_to(555)

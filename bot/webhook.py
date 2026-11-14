@@ -98,7 +98,7 @@ def create_webhook_app(app: App) -> web.Application:
                 "<i>Технические детали для разработчика:</i>\n"
                 f"<code>{html.escape(raw[:500].decode('utf-8', 'replace'))}</code>"
             )
-            for admin_id in app.settings.admin_ids:
+            for admin_id in app.settings.all_admin_ids:
                 try:
                     await app.bot.send_message(
                         admin_id,
