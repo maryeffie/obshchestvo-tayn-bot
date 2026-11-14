@@ -151,3 +151,51 @@ def test_webhook_signature_over_raw_body_is_accepted() -> None:
     assert client.verify_raw(raw, signature.upper(), data) is True   # регистр не важен
     assert client.verify_raw(raw, "deadbeef", data) is False
     assert client.verify_raw(raw, None, data) is False
+
+
+def test_webhook_signature_with_nested_products_from_form() -> None:
+    """Настоящий Prodamus присылает корзину плоскими ключами, а подписывает вложенный JSON."""
+    import hashlib
+    import hmac
+    import json
+
+    from bot.prodamus import ProdamusClient
+
+    from .helpers import make_settings
+
+    settings = make_settings()
+    client = ProdamusClient(settings)
+
+    form = {
+        "order_num": "tg1-abc",
+        "order_id": "048339",
+        "payment_status": "success",
+        "sum": "790",
+        "customer_extra": "tg:1",
+        "products[0][name]": "Подписка «Общество тайн» (1 месяц)",
+        "products[0][price]": "790",
+        "products[0][quantity]": "1",
+        "products[0][sum]": "790",
+    }
+    nested = {
+        "order_num": "tg1-abc",
+        "order_id": "048339",
+        "payment_status": "success",
+        "sum": "790",
+        "customer_extra": "tg:1",
+        "products": [
+            {
+                "name": "Подписка «Общество тайн» (1 месяц)",
+                "price": "790",
+                "quantity": "1",
+                "sum": "790",
+            }
+        ],
+    }
+    payload = json.dumps(
+        nested, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode()
+    signature = hmac.new(settings.prodamus_secret.encode(), payload, hashlib.sha256).hexdigest()
+
+    assert client._unflatten(form) == nested
+    assert client.verify_raw(b"", signature, form) is True

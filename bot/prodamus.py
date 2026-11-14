@@ -274,37 +274,97 @@ class ProdamusClient:
             )
         return False
 
-    def verify_raw(self, raw_body: bytes, signature: str | None, data: dict) -> bool:
-        """Проверка подписи по сырому телу запроса.
+    def _sign_variants(self, data: Any) -> list[bytes]:
+        """Все разумные способы сериализовать данные для подписи.
 
-        Prodamus подписывает уведомление как есть — без нашей нормализации
-        (сортировки ключей и переформатирования JSON). Поэтому пробуем
-        несколько вариантов: тело целиком, значение поля submit как строку,
-        а также компактный JSON из данных.
+        Prodamus подписывает JSON своим (PHP-шным) способом, и заранее неизвестно,
+        сортирует ли он ключи и экранирует ли слэши. Пробуем весь набор —
+        совпадение хотя бы с одним означает, что уведомление подлинное.
         """
+        variants: list[bytes] = []
+        for sort_keys in (True, False):
+            for ensure_ascii in (False, True):
+                for escape_slashes in (False, True):
+                    try:
+                        text = json.dumps(
+                            data,
+                            ensure_ascii=ensure_ascii,
+                            separators=(",", ":"),
+                            sort_keys=sort_keys,
+                        )
+                    except (TypeError, ValueError):
+                        continue
+                    if escape_slashes:
+                        text = text.replace("/", "\\/")
+                    variants.append(text.encode("utf-8"))
+        return variants
+
+    @staticmethod
+    def _unflatten(data: dict) -> dict:
+        """products[0][name] -> {"products": [{"name": ...}]}.
+
+        В urlencoded-уведомлении Prodamus корзина приходит «плоскими» ключами,
+        а подписывается вложенным JSON. Восстанавливаем структуру.
+        """
+        root: dict = {}
+        for key, value in data.items():
+            parts = re.findall(r"[^\[\]]+", str(key))
+            if len(parts) < 2:
+                root[key] = value
+                continue
+            node: Any = root
+            for index, part in enumerate(parts):
+                last = index == len(parts) - 1
+                slot: Any = int(part) if part.isdigit() else part
+                if last:
+                    if isinstance(node, list):
+                        while len(node) <= slot:
+                            node.append(None)
+                        node[slot] = value
+                    else:
+                        node[slot] = value
+                    break
+                next_is_index = parts[index + 1].isdigit()
+                if isinstance(node, list):
+                    while len(node) <= slot:
+                        node.append(None)
+                    if not isinstance(node[slot], (dict, list)):
+                        node[slot] = [] if next_is_index else {}
+                    node = node[slot]
+                else:
+                    if not isinstance(node.get(slot), (dict, list)):
+                        node[slot] = [] if next_is_index else {}
+                    node = node[slot]
+        return root
+
+    def verify_raw(self, raw_body: bytes, signature: str | None, data: dict) -> bool:
+        """Проверка подписи по сырому телу запроса и по всем вариантам сериализации."""
         if not signature:
             return False
+        expected = str(signature).strip().lower()
+        secret = self.settings.prodamus_secret.encode("utf-8")
+
         candidates: list[bytes] = [raw_body]
         submit = data.get("submit")
         if isinstance(submit, str) and submit:
             candidates.append(submit.encode("utf-8"))
+            try:
+                parsed = json.loads(submit)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                candidates.extend(self._sign_variants(parsed))
         elif isinstance(submit, dict):
-            candidates.append(
-                json.dumps(
-                    submit, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-                ).encode("utf-8")
-            )
+            candidates.extend(self._sign_variants(submit))
+
         cleaned = {k: v for k, v in data.items() if k not in {"signature", "sign"}}
-        candidates.append(
-            json.dumps(
-                cleaned, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-            ).encode("utf-8")
-        )
-        expected = str(signature).strip().lower()
+        candidates.extend(self._sign_variants(cleaned))
+        nested = self._unflatten(cleaned)
+        if nested != cleaned:
+            candidates.extend(self._sign_variants(nested))
+
         for candidate in candidates:
-            digest = hmac.new(
-                self.settings.prodamus_secret.encode("utf-8"), candidate, hashlib.sha256
-            ).hexdigest()
+            digest = hmac.new(secret, candidate, hashlib.sha256).hexdigest()
             if hmac.compare_digest(digest, expected):
                 return True
         return False

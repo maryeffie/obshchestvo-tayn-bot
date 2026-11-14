@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 from urllib.parse import parse_qs
@@ -93,7 +94,9 @@ def create_webhook_app(app: App) -> web.Application:
                 f"Сумма: {data.get('sum') or '—'} {data.get('currency') or ''}\n"
                 f"Телефон: {data.get('customer_phone') or '—'}\n\n"
                 "Проверьте платёж в кабинете Prodamus. Если деньги пришли — нажмите "
-                "кнопку, доступ откроется сам."
+                "кнопку, доступ откроется сам.\n\n"
+                "<i>Технические детали для разработчика:</i>\n"
+                f"<code>{html.escape(raw[:500].decode('utf-8', 'replace'))}</code>"
             )
             for admin_id in app.settings.admin_ids:
                 try:
