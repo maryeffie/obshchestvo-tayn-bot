@@ -184,6 +184,23 @@ def admins_kb(admins: list[dict], owner_ids: tuple[int, ...]) -> InlineKeyboardM
     return builder.as_markup()
 
 
+def user_card_kb(tg_id: int) -> InlineKeyboardMarkup:
+    """Кнопки под карточкой участника: проверить вход и выдать доступ."""
+    return _kb(
+        [
+            InlineKeyboardButton(
+                text="🔎 Проверить вход в канал", callback_data=f"adm:check:{tg_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎁 Выдать доступ на 30 дней", callback_data=f"adm:quickgrant:{tg_id}"
+            )
+        ],
+        [InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="adm:panel")],
+    )
+
+
 def back_to_panel_kb() -> InlineKeyboardMarkup:
     return _kb([InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="adm:panel")])
 

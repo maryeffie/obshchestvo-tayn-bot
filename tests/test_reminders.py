@@ -98,7 +98,8 @@ def test_reminder_stage_resets_after_payment() -> None:
         user = await app.db.get_user(703)
         assert user["reminder_stage"] == 0
         until = from_iso(user["paid_until"])
-        assert until is not None and (until - utcnow()).days >= 32
+        # 2 дня остатка + 30 новых; сравниваем с запасом, чтобы не ловить границу суток
+        assert until is not None and until - utcnow() > timedelta(days=31, hours=20)
 
         # в новом периоде напоминания снова возможны
         await app.db.activate(703, utcnow() + timedelta(days=2), source="prodamus")

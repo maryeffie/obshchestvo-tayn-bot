@@ -48,6 +48,7 @@ class FakeBot:
         self.banned: list[tuple[Any, int]] = []
         self.unbanned: list[tuple[Any, int]] = []
         self.blocked_users: set[int] = set()
+        self.member_status = "administrator"  # статус человека в канале и чате
         self.session = SimpleNamespace(close=self._noop)
 
     async def _noop(self) -> None:
@@ -81,7 +82,7 @@ class FakeBot:
         return True
 
     async def get_chat_member(self, chat_id, user_id):
-        return SimpleNamespace(status="administrator", can_invite_users=True)
+        return SimpleNamespace(status=self.member_status, can_invite_users=True)
 
     # ------------------------------------------------------------------ helpers
 

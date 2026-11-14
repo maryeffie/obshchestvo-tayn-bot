@@ -20,11 +20,13 @@ from ..filters import IsAdmin
 from ..keyboards import (
     admin_kb,
     admins_kb,
+    user_card_kb,
     back_to_panel_kb,
     cancel_kb,
     promos_kb,
 )
 from ..prodamus import sign_payload
+from ..services.access import status_ru
 from ..utils import (
     fmt_date,
     from_iso,
@@ -213,6 +215,41 @@ def build_router(app: App) -> Router:
                 "«Приглашать пользователей».",
                 reply_markup=back_to_panel_kb(),
             )
+
+    async def run_check(tg_id: int) -> str:
+        """Статусы в канале/чате + разбан + свежие ссылки. Общая для /check и кнопки."""
+        statuses = await access.lift_ban(tg_id)  # заодно снимает бан, если он есть
+        ok, error = await access.send_links_again(tg_id)
+        return texts.CHECK_RESULT.format(
+            tg_id=tg_id,
+            channel=status_ru(statuses.get("channel", "—")),
+            chat=status_ru(statuses.get("chat", "—")),
+            links=texts.CHECK_LINKS_OK
+            if ok
+            else texts.CHECK_LINKS_FAIL.format(error=error or "неизвестно"),
+        )
+
+    @router.callback_query(F.data.startswith("adm:check:"), is_admin)
+    async def cb_check(call: CallbackQuery) -> None:
+        raw = (call.data or "").split(":")[-1]
+        if not raw.lstrip("-").isdigit():
+            await call.answer("Не понял ID", show_alert=True)
+            return
+        await call.answer("Проверяю…")
+        if call.message is not None:
+            await call.message.answer(
+                await run_check(int(raw)), reply_markup=back_to_panel_kb()
+            )
+
+    @router.message(Command("check"), is_admin)
+    async def cmd_check(message: Message) -> None:
+        """Почему человек не может войти: /check 2138023308."""
+        parts = (message.text or "").split(maxsplit=1)
+        target = parts[1].strip() if len(parts) > 1 else ""
+        if not target.lstrip("-").isdigit():
+            await message.answer(texts.CHECK_USAGE)
+            return
+        await message.answer(await run_check(int(target)), reply_markup=back_to_panel_kb())
 
     @router.message(Command("testpay"), is_admin)
     async def cmd_testpay(message: Message) -> None:
@@ -541,7 +578,7 @@ def build_router(app: App) -> Router:
                 phone=user.get("phone") or "—",
                 created=fmt_date(user.get("created_at"), settings.timezone),
             ),
-            reply_markup=back_to_panel_kb(),
+            reply_markup=user_card_kb(int(user["tg_id"])),
         )
 
     # ---------------------------------------------------------- промокоды

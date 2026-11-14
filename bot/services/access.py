@@ -64,6 +64,43 @@ class AccessService:
         chat_link = await self.create_invite_link(self.settings.chat_id)
         return channel_link, chat_link
 
+    async def chat_status(self, chat_id: int | str, tg_id: int) -> str:
+        """Статус человека в канале/чате: member, administrator, left, kicked, not_member."""
+        try:
+            member = await self.bot.get_chat_member(chat_id=chat_id, user_id=tg_id)
+        except TelegramBadRequest as exc:
+            if _is_not_participant(str(exc)):
+                return "not_member"
+            return f"ошибка: {exc}"
+        except TelegramAPIError as exc:
+            return f"ошибка: {exc}"
+        return getattr(member, "status", "unknown")
+
+    async def lift_ban(self, tg_id: int) -> dict[str, str]:
+        """Снимает бан в канале и чате.
+
+        Если человека когда-то исключили (а исключение в Telegram — это бан,
+        пусть и снятый сразу), остаточный бан не даёт войти даже по свежей
+        ссылке: Telegram отвечает «ссылка недействительна».
+        """
+        result: dict[str, str] = {}
+        for name, chat in (
+            ("channel", self.settings.channel_id),
+            ("chat", self.settings.chat_id),
+        ):
+            status = await self.chat_status(chat, tg_id)
+            if status == "kicked":
+                try:
+                    await self.bot.unban_chat_member(
+                        chat_id=chat, user_id=tg_id, only_if_banned=True
+                    )
+                    status = "kicked→разбанен"
+                except TelegramAPIError as exc:
+                    log.warning("unban_chat_member(%s, %s): %s", chat, tg_id, exc)
+                    status = f"kicked, разбан не удался: {exc}"
+            result[name] = status
+        return result
+
     async def access_keyboard(self, show_cancel: bool = False) -> InlineKeyboardMarkup:
         channel_link, chat_link = await self.create_access_links()
         return access_kb(channel_link, chat_link, show_cancel=show_cancel)
@@ -79,6 +116,7 @@ class AccessService:
         text: str | None = None,
     ) -> tuple[bool, str | None]:
         """Отправляет поздравление со ссылками на канал и чат."""
+        await self.lift_ban(tg_id)
         try:
             keyboard = await self.access_keyboard()
         except (TelegramAPIError, TelegramBadRequest) as exc:
@@ -158,6 +196,7 @@ class AccessService:
     async def send_links_again(
         self, tg_id: int, show_cancel: bool = False
     ) -> tuple[bool, str | None]:
+        await self.lift_ban(tg_id)
         try:
             keyboard = await self.access_keyboard(show_cancel=show_cancel)
         except (TelegramAPIError, TelegramBadRequest) as exc:
@@ -261,6 +300,21 @@ def _days_word(days: int) -> str:
     if days % 10 in (2, 3, 4) and days % 100 not in (12, 13, 14):
         return "дня"
     return "дней"
+
+
+STATUS_RU = {
+    "member": "состоит",
+    "administrator": "администратор",
+    "creator": "владелец",
+    "restricted": "ограничен",
+    "left": "вышел сам",
+    "kicked": "заблокирован (выгнан)",
+    "not_member": "не состоит",
+}
+
+
+def status_ru(status: str) -> str:
+    return STATUS_RU.get(status, status)
 
 
 def _is_not_participant(error: str) -> bool:

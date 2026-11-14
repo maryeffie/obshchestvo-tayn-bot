@@ -38,3 +38,90 @@ def test_zero_means_unlimited_entries_within_24_hours() -> None:
         assert bot.invites[0]["expire_date"] > time.time() + 23 * 3600
 
     asyncio.run(scenario())
+
+
+def test_banned_user_is_unbanned_before_new_links() -> None:
+    """Если человека когда-то выгнали, остаточный бан не пустит по ссылке."""
+
+    async def scenario() -> None:
+        app = await make_app()
+        app.bot.member_status = "kicked"
+
+        ok, error = await app.access.send_links_again(555)
+
+        assert ok and error is None
+        chats = {chat for chat, _ in app.bot.unbanned}
+        assert chats == {app.settings.channel_id, app.settings.chat_id}
+        assert len(app.bot.invites) == 2
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_check_command_shows_statuses_and_sends_links() -> None:
+    from bot.handlers import admin as admin_handlers
+    from tests.test_handlers import FakeMessage, _handler
+
+    async def scenario() -> None:
+        app = await make_app()
+        app.bot.member_status = "kicked"
+        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+
+        message = FakeMessage("/check 2138023308", user_id=111)
+        await _handler(router, "message", "cmd_check")(message)
+
+        text = message.answers[-1]["text"]
+        assert "2138023308" in text
+        assert "разбанен" in text
+        assert "Свежие ссылки" in text and "отправлены" in text
+        assert any("Новые ссылки" in t for t in app.bot.texts_to(2138023308))
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_check_command_without_id_prints_hint() -> None:
+    from bot.handlers import admin as admin_handlers
+    from tests.test_handlers import FakeMessage, _handler
+
+    async def scenario() -> None:
+        app = await make_app()
+        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+        message = FakeMessage("/check", user_id=111)
+        await _handler(router, "message", "cmd_check")(message)
+        assert "Формат" in message.answers[-1]["text"]
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_member_card_has_check_button_and_it_works() -> None:
+    """В карточке участника есть кнопка «Проверить вход в канал»."""
+
+    async def scenario() -> None:
+        from bot.handlers import admin as admin_handlers
+        from tests.helpers import buttons_of
+        from tests.test_handlers import FakeCallback, FakeMessage, FakeState, _handler
+
+        app = await make_app()
+        app.bot.member_status = "kicked"
+        await app.db.upsert_user(2138023308, "marina_moii", "Marina")
+        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+
+        find = FakeMessage("marina_moii", user_id=111)
+        await _handler(router, "message", "find_user")(find, FakeState())
+        card = find.answers[-1]
+        assert "2138023308" in card["text"]
+        assert "Проверить вход в канал" in buttons_of(card["keyboard"])
+        assert "Выдать доступ на 30 дней" in buttons_of(card["keyboard"])
+
+        call = FakeCallback(
+            "adm:check:2138023308", FakeMessage(user_id=111), user_id=111
+        )
+        await _handler(router, "callback_query", "cb_check")(call)
+        text = call.message.answers[-1]["text"]
+        assert "разбанен" in text and "отправлены" in text
+
+        await app.db.close()
+
+    asyncio.run(scenario())
