@@ -20,7 +20,6 @@ from ..filters import IsAdmin
 from ..keyboards import (
     admin_kb,
     back_to_panel_kb,
-    pay_url_kb,
     cancel_kb,
     promos_kb,
 )
@@ -68,7 +67,6 @@ def build_router(app: App) -> Router:
     settings = app.settings
     db = app.db
     access = app.access
-    app_prodamus = app.prodamus
     payments = app.payments
     subscriptions = app.subscriptions
     is_admin = IsAdmin(settings)
@@ -98,36 +96,6 @@ def build_router(app: App) -> Router:
     async def cmd_chatid(message: Message) -> None:
         await message.answer(
             f"chat_id: <code>{message.chat.id}</code>\nтип чата: {message.chat.type}"
-        )
-
-    @router.message(Command("pay1"), is_admin)
-    async def cmd_pay1(message: Message) -> None:
-        """Ссылка на настоящий платёж за 1 ₽: скидка = цена минус 1 ₽.
-
-        Нужна, чтобы проверить боевой вебхук Prodamus, не меняя цену
-        в кабинете и в настройках бота.
-        """
-        if message.from_user is None:
-            return
-        tg_id = message.from_user.id
-        await db.upsert_user(tg_id)
-        discount = max(1, settings.price - 1)
-        order_id = payments.new_order_id(tg_id)
-        await db.create_order(
-            order_id=order_id,
-            tg_id=tg_id,
-            amount=settings.price,
-            is_recurring=settings.is_recurrent,
-        )
-        url = app_prodamus.payment_url(tg_id, order_id, settings.price, discount)
-        await message.answer(
-            "💳 <b>Тестовый платёж за 1 ₽</b>\n\n"
-            f"Обычная цена: {fmt_price(settings.price, settings.currency)}\n"
-            f"Скидка: {fmt_price(discount, settings.currency)}\n"
-            f"К оплате: {fmt_price(1, settings.currency)}\n\n"
-            "Ссылка действует как обычная: после оплаты бот должен сам выдать доступ "
-            "и прислать ссылки в канал и чат.",
-            reply_markup=pay_url_kb(url, "Оплатить 1 ₽"),
         )
 
     @router.message(Command("fakepay"), is_admin)

@@ -15,6 +15,7 @@ from .. import texts
 from ..app import App
 from ..keyboards import (
     cancel_confirm_kb,
+    pay_url_kb,
     foreign_pay_kb,
     member_kb,
     paywall_kb,
@@ -37,6 +38,7 @@ def build_router(app: App) -> Router:
     router = Router(name="user")
     settings = app.settings
     bot = app.bot
+    app_prodamus = app.prodamus
     db = app.db
     access = app.access
     payments = app.payments
@@ -154,6 +156,51 @@ def build_router(app: App) -> Router:
         assert message.from_user is not None
         await ensure_user(message)
         await send_status(message, message.from_user.id)
+
+    @router.message(Command("pay1"))
+    async def cmd_pay1(message: Message, state: FSMContext) -> None:
+        """Тестовая оплата за 1 ₽ — доступна всем, пока включена в настройках.
+
+        Пока идёт проверка оплаты, Марина может заплатить с любого аккаунта.
+        Когда тесты закончатся, выключите PAY1_ENABLED — команда замолчит.
+        """
+        if message.from_user is None:
+            return
+        await state.clear()
+        if not settings.pay1_enabled:
+            await message.answer(texts.PAY1_OFF)
+            return
+        allowed, used = await db.bump_counter("pay1", settings.pay1_limit)
+        if not allowed:
+            await message.answer(texts.PAY1_LIMIT.format(limit=settings.pay1_limit))
+            return
+
+        tg_id = message.from_user.id
+        await db.upsert_user(tg_id, message.from_user.username, message.from_user.first_name)
+        discount = max(1, settings.price - 1)
+        order_id = payments.new_order_id(tg_id)
+        await db.create_order(
+            order_id=order_id,
+            tg_id=tg_id,
+            amount=settings.price,
+            is_recurring=settings.is_recurrent,
+        )
+        url = app_prodamus.payment_url(tg_id, order_id, settings.price, discount)
+        await message.answer(
+            texts.PAY1_LINK.format(
+                price=price_label,
+                discount=fmt_price(discount, settings.currency),
+                one=fmt_price(1, settings.currency),
+                left=max(0, settings.pay1_limit - used),
+            ),
+            reply_markup=pay_url_kb(url, "Оплатить 1 ₽"),
+        )
+        await access.notify_admins(
+            "🧪 <b>Тестовая оплата за 1 ₽</b>\n\n"
+            f"Пользователь: {human_username(await db.get_user(tg_id))}\n"
+            f"ID: <code>{tg_id}</code>\n"
+            f"Осталось тестовых оплат: {max(0, settings.pay1_limit - used)}"
+        )
 
     @router.message(Command("help"))
     async def cmd_help(message: Message) -> None:

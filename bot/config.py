@@ -131,6 +131,10 @@ class Settings:
     public_base_url: str | None
     webhook_token: str | None
 
+    # тестовая оплата за 1 ₽ (команда /pay1) — по умолчанию выключена
+    pay1_enabled: bool
+    pay1_limit: int
+
     # Прочее
     db_path: str
     timezone: ZoneInfo
@@ -187,6 +191,8 @@ def load_settings() -> Settings:
         webhook_path=_normalize_path(_raw("WEBHOOK_PATH", "/prodamus/webhook")),
         public_base_url=_raw("PUBLIC_BASE_URL"),
         webhook_token=_raw("WEBHOOK_TOKEN"),
+        pay1_enabled=_bool("PAY1_ENABLED", False),
+        pay1_limit=_int("PAY1_LIMIT", 3) or 3,
         db_path=_raw("DB_PATH", "data/club.db"),
         timezone=ZoneInfo(_raw("TZ", "Europe/Moscow")),
         support_contact=_raw("SUPPORT_CONTACT"),

@@ -9,7 +9,7 @@ from bot.handlers import user as user_handlers
 from bot.utils import from_iso, is_active, utcnow
 
 from .helpers import make_app
-from .test_handlers import FakeCallback, FakeMessage, _buttons, _handler
+from .test_handlers import FakeCallback, FakeMessage, FakeState, _buttons, _handler
 
 ADMIN_ID = 111
 
@@ -94,21 +94,44 @@ def test_admin_fakepay_runs_full_payment_path_without_money() -> None:
     asyncio.run(scenario())
 
 
-def test_admin_pay1_builds_link_with_discount_to_one_ruble() -> None:
-    """/pay1 — настоящая оплата, но за 1 ₽: скидка = цена минус 1."""
+def test_pay1_is_available_to_any_user_and_respects_limit() -> None:
+    """/pay1 доступна обычному пользователю: ссылка на 1 ₽ и лимит использований."""
+    from bot.handlers import user as user_handlers
 
     async def scenario() -> None:
-        app = await make_app()
-        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+        app = await make_app(pay1_limit=1)
+        router = user_handlers.build_router(app)  # type: ignore[arg-type]
+        handler = _handler(router, "message", "cmd_pay1")
 
-        message = FakeMessage("/pay1", user_id=ADMIN_ID)
-        await _handler(router, "message", "cmd_pay1")(message)
-
+        # обычный пользователь, не админ
+        message = FakeMessage("/pay1", user_id=555)
+        await handler(message, FakeState())
         assert "Тестовый платёж за 1 ₽" in message.last_text
         url = message.answers[-1]["keyboard"].inline_keyboard[0][0].url
         assert "discount_value=789" in url
         assert "subscription=4242" in url
+        assert any("Тестовая оплата за 1 ₽" in text for text in app.bot.texts_to(ADMIN_ID))
 
+        # лимит исчерпан — второй ссылки не выдаём
+        second = FakeMessage("/pay1", user_id=556)
+        await handler(second, FakeState())
+        assert "Оплатить" not in second.answers[-1]["text"]
+        assert "закончились" in second.answers[-1]["text"]
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_pay1_silent_when_disabled() -> None:
+    from bot.handlers import user as user_handlers
+
+    async def scenario() -> None:
+        app = await make_app(pay1_enabled=False)
+        router = user_handlers.build_router(app)  # type: ignore[arg-type]
+        message = FakeMessage("/pay1", user_id=555)
+        await _handler(router, "message", "cmd_pay1")(message, FakeState())
+        assert "выключена" in message.last_text
         await app.db.close()
 
     asyncio.run(scenario())

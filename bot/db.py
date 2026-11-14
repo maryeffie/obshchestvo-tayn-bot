@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);
 
+CREATE TABLE IF NOT EXISTS counters (
+    name  TEXT PRIMARY KEY,
+    value INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS promos (
     code             TEXT PRIMARY KEY COLLATE NOCASE,
     discount_percent INTEGER NOT NULL DEFAULT 0,     -- скидка в процентах от цены
@@ -358,6 +363,21 @@ class Database:
                 now_iso(),
             ),
         )
+
+    async def bump_counter(self, name: str, limit: int) -> tuple[bool, int]:
+        """Увеличивает счётчик. Возвращает (разрешено, сколько уже использовано)."""
+        row = await self._fetchone("SELECT value FROM counters WHERE name = ?", (name,))
+        used = int(row["value"]) if row else 0
+        if used >= limit:
+            return False, used
+        await self._write(
+            """
+            INSERT INTO counters (name, value) VALUES (?, 1)
+            ON CONFLICT(name) DO UPDATE SET value = value + 1
+            """,
+            (name,),
+        )
+        return True, used + 1
 
     async def find_pending_order(self, tg_id: int) -> dict | None:
         """Последний неоплаченный заказ участника — для сверки платежа."""

@@ -128,6 +128,8 @@ def make_settings(**overrides) -> Settings:
         webhook_path="/prodamus/webhook",
         public_base_url="https://bot.example.com",
         webhook_token=None,
+        pay1_enabled=True,
+        pay1_limit=3,
         db_path=":memory:",
         timezone=__import__("zoneinfo").ZoneInfo("Europe/Moscow"),
         support_contact="@marina",
