@@ -42,6 +42,11 @@ def paywall_kb(
 
 
 
+def pay_url_kb(pay_url: str, label: str = "Перейти к оплате") -> InlineKeyboardMarkup:
+    """Одна кнопка-ссылка (например, для тестового платежа)."""
+    return _kb([InlineKeyboardButton(text=f"💳 {label}", url=pay_url)])
+
+
 def foreign_pay_kb(pay_url: str) -> InlineKeyboardMarkup:
     return _kb(
         [InlineKeyboardButton(text="💳 Перейти к оплате", url=pay_url)],

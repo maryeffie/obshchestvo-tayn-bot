@@ -92,3 +92,23 @@ def test_admin_fakepay_runs_full_payment_path_without_money() -> None:
         await app.db.close()
 
     asyncio.run(scenario())
+
+
+def test_admin_pay1_builds_link_with_discount_to_one_ruble() -> None:
+    """/pay1 — настоящая оплата, но за 1 ₽: скидка = цена минус 1."""
+
+    async def scenario() -> None:
+        app = await make_app()
+        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+
+        message = FakeMessage("/pay1", user_id=ADMIN_ID)
+        await _handler(router, "message", "cmd_pay1")(message)
+
+        assert "Тестовый платёж за 1 ₽" in message.last_text
+        url = message.answers[-1]["keyboard"].inline_keyboard[0][0].url
+        assert "discount_value=789" in url
+        assert "subscription=4242" in url
+
+        await app.db.close()
+
+    asyncio.run(scenario())
