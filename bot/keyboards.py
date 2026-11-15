@@ -197,12 +197,29 @@ def user_card_kb(tg_id: int) -> InlineKeyboardMarkup:
                 text="🎁 Выдать доступ на 30 дней", callback_data=f"adm:quickgrant:{tg_id}"
             )
         ],
+        [
+            InlineKeyboardButton(
+                text="🚫 Забрать доступ", callback_data=f"adm:revoke_ask:{tg_id}"
+            )
+        ],
         [InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="adm:panel")],
     )
 
 
 def back_to_panel_kb() -> InlineKeyboardMarkup:
     return _kb([InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="adm:panel")])
+
+
+def revoke_confirm_kb(tg_id: int) -> InlineKeyboardMarkup:
+    """Подтверждение до исключения: исключение необратимо одним кликом."""
+    return _kb(
+        [
+            InlineKeyboardButton(
+                text="✅ Да, забрать доступ", callback_data=f"adm:revoke_yes:{tg_id}"
+            )
+        ],
+        [InlineKeyboardButton(text="↩️ Оставить как есть", callback_data="adm:panel")],
+    )
 
 
 def cancel_kb() -> InlineKeyboardMarkup:

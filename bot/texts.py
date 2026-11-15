@@ -292,10 +292,11 @@ ADMIN_STATS = (
     "Оплат за месяц: <b>{payments_month}</b> на сумму <b>{revenue_month}</b>\n"
     "Оплат всего: <b>{payments_total}</b> на сумму <b>{revenue_total}</b>"
 )
-ADMIN_ASK_USER = (
-    "<b>Кому выдаём доступ?</b>\n\n"
-    "Пришлите Telegram ID, @username или перешлите сообщение от человека."
-)
+_ASK_WHO = "Пришлите Telegram ID, @username или перешлите сообщение от человека."
+ADMIN_ASK_USER = f"<b>Кому выдаём доступ?</b>\n\n{_ASK_WHO}"
+ADMIN_ASK_USER_GRANT = ADMIN_ASK_USER
+ADMIN_ASK_USER_REVOKE = f"<b>У кого забираем доступ?</b>\n\n{_ASK_WHO}"
+ADMIN_ASK_USER_FIND = f"<b>Кого ищем?</b>\n\n{_ASK_WHO}"
 ADMIN_ASK_DAYS = (
     "<b>На сколько дней открыть доступ?</b>\n\n"
     "Пришлите число (например, 30). Отправьте 0, чтобы использовать значение по умолчанию."
@@ -312,6 +313,11 @@ ADMIN_GRANTED = (
 ADMIN_GRANT_FAILED = (
     "<b>Доступ в базе выдан ({user}, до {date}), но написать пользователю не удалось.</b>\n\n"
     "Скорее всего, он не начинал диалог с ботом. Ошибка: {error}"
+)
+ADMIN_REVOKE_CONFIRM = (
+    "<b>Забрать доступ?</b>\n\n"
+    "{user} (<code>{tg_id}</code>) сразу вылетит из канала и чата, доступ закроется.\n\n"
+    "Человек сможет вернуться по новой ссылке после оплаты."
 )
 ADMIN_REVOKED = "<b>Готово.</b> Пользователь {user} исключён из канала и чата, доступ закрыт."
 ADMIN_REVOKE_NOT_FOUND = "<b>Такого пользователя в базе нет.</b>"

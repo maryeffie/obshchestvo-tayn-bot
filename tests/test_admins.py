@@ -95,3 +95,143 @@ def test_owner_cannot_be_removed_and_added_admin_can() -> None:
         await app.db.close()
 
     asyncio.run(scenario())
+
+
+def test_stats_screen_renders_all_placeholders() -> None:
+    """Статистика падала с KeyError: 'autorenew_off' — все числа должны подставляться."""
+
+    async def scenario() -> None:
+        from datetime import timedelta
+
+        from bot.handlers import admin as admin_handlers
+        from bot.utils import utcnow
+        from tests.test_handlers import FakeMessage, _handler
+
+        app = await make_app()
+        await app.db.upsert_user(MARINA_ID, "marina_moii", "Марина")
+        await app.db.activate(MARINA_ID, utcnow() + timedelta(days=30), source="manual")
+        await app.db.set_auto_renew(MARINA_ID, False)
+
+        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+        message = FakeMessage("/stats", user_id=OWNER_ID)
+        await _handler(router, "message", "cmd_stats")(message)
+
+        text = message.answers[-1]["text"]
+        assert "Статистика" in text
+        # все подстановки из шаблона заполнены — ни одной «{...}»
+        assert "{" not in text and "}" not in text
+        # и число отключивших автопродление доехало до экрана
+        assert "Отменили автопродление (доступ ещё действует): <b>1</b>" in text
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_each_panel_button_asks_its_own_question() -> None:
+    """«Забрать доступ» больше не спрашивает «Кому выдаём доступ?»."""
+
+    async def scenario() -> None:
+        from bot.handlers import admin as admin_handlers
+        from tests.test_handlers import FakeCallback, FakeMessage, FakeState, _handler
+
+        app = await make_app()
+        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+
+        async def ask(handler_name: str, data: str) -> str:
+            message = FakeMessage(user_id=OWNER_ID)
+            call = FakeCallback(data, message, user_id=OWNER_ID)
+            await _handler(router, "callback_query", handler_name)(call, FakeState())
+            return message.answers[-1]["text"]
+
+        grant = await ask("cb_grant", "adm:grant")
+        revoke = await ask("cb_revoke", "adm:revoke")
+        find = await ask("cb_find", "adm:find")
+
+        assert "Кому выдаём доступ" in grant
+        assert "У кого забираем доступ" in revoke
+        assert "Кого ищем" in find
+        assert len({grant, revoke, find}) == 3
+        # подсказка про ввод во всех трёх одинаковая
+        assert all("@username" in text for text in (grant, revoke, find))
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_revoke_asks_for_confirmation_before_kicking() -> None:
+    """«Забрать доступ» сначала спрашивает подтверждение, и только потом исключает."""
+
+    async def scenario() -> None:
+        from datetime import timedelta
+
+        from bot.handlers import admin as admin_handlers
+        from bot.keyboards import revoke_confirm_kb
+        from bot.utils import utcnow
+        from tests.helpers import buttons_of
+        from tests.test_handlers import FakeCallback, FakeMessage, FakeState, _handler
+
+        app = await make_app()
+        await app.db.upsert_user(MARINA_ID, "marina_moii", "Marina")
+        await app.db.activate(MARINA_ID, utcnow() + timedelta(days=30), source="manual")
+        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+
+        # 1. прислали имя — бот НЕ исключает, а спрашивает подтверждение
+        message = FakeMessage("marina_moii", user_id=OWNER_ID)
+        await _handler(router, "message", "revoke_user")(message, FakeState())
+        answer = message.answers[-1]
+        assert "Забрать доступ?" in answer["text"]
+        assert "2138023308" in answer["text"]
+        assert "Да, забрать доступ" in buttons_of(answer["keyboard"])
+        assert "Оставить как есть" in buttons_of(answer["keyboard"])
+        assert app.bot.banned == []  # никого не тронули
+
+        # 2. нажали «Да» — вот теперь исключаем
+        call = FakeCallback(
+            f"adm:revoke_yes:{MARINA_ID}", FakeMessage(user_id=OWNER_ID), user_id=OWNER_ID
+        )
+        await _handler(router, "callback_query", "cb_revoke_yes")(call)
+        assert "исключён из канала и чата" in call.message.answers[-1]["text"]
+        assert {chat for chat, _ in app.bot.banned} == {
+            app.settings.channel_id,
+            app.settings.chat_id,
+        }
+        user = await app.db.get_user(MARINA_ID)
+        assert user["status"] == "expired"
+
+        # 3. «Оставить как есть» ведёт просто в панель — проверим саму клавиатуру
+        keyboard = revoke_confirm_kb(MARINA_ID)
+        assert buttons_of(keyboard) == ["Да, забрать доступ", "Оставить как есть"]
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_member_card_has_revoke_button_with_confirmation() -> None:
+    async def scenario() -> None:
+        from bot.handlers import admin as admin_handlers
+        from tests.helpers import buttons_of
+        from tests.test_handlers import FakeCallback, FakeMessage, FakeState, _handler
+
+        app = await make_app()
+        await app.db.upsert_user(MARINA_ID, "marina_moii", "Marina")
+        router = admin_handlers.build_router(app)  # type: ignore[arg-type]
+
+        find = FakeMessage("marina_moii", user_id=OWNER_ID)
+        await _handler(router, "message", "find_user")(find, FakeState())
+        assert "Забрать доступ" in buttons_of(find.answers[-1]["keyboard"])
+
+        call = FakeCallback(
+            f"adm:revoke_ask:{MARINA_ID}", FakeMessage(user_id=OWNER_ID), user_id=OWNER_ID
+        )
+        await _handler(router, "callback_query", "cb_revoke_ask")(call)
+        answer = call.message.answers[-1]
+        assert "Забрать доступ?" in answer["text"]
+        assert "Да, забрать доступ" in buttons_of(answer["keyboard"])
+        assert app.bot.banned == []  # пока не подтвердили — никого не трогаем
+
+        await app.db.close()
+
+    asyncio.run(scenario())

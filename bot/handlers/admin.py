@@ -20,6 +20,7 @@ from ..filters import IsAdmin
 from ..keyboards import (
     admin_kb,
     admins_kb,
+    revoke_confirm_kb,
     user_card_kb,
     back_to_panel_kb,
     cancel_kb,
@@ -310,6 +311,7 @@ def build_router(app: App) -> Router:
             users_total=stats["users_total"],
             active=stats["active"],
             expiring_3d=stats["expiring_3d"],
+            autorenew_off=stats["autorenew_off"],
             users_new_month=stats["users_new_month"],
             payments_month=stats["payments_month"],
             revenue_month=fmt_price(stats["revenue_month"], settings.currency),
@@ -412,7 +414,7 @@ def build_router(app: App) -> Router:
         await state.set_state(AdminStates.grant_user)
         await call.answer()
         if call.message is not None:
-            await call.message.answer(texts.ADMIN_ASK_USER, reply_markup=cancel_kb())
+            await call.message.answer(texts.ADMIN_ASK_USER_GRANT, reply_markup=cancel_kb())
 
     @router.message(AdminStates.grant_user, is_admin, F.text)
     async def grant_user(message: Message, state: FSMContext) -> None:
@@ -495,7 +497,15 @@ def build_router(app: App) -> Router:
         await state.set_state(AdminStates.revoke_user)
         await call.answer()
         if call.message is not None:
-            await call.message.answer(texts.ADMIN_ASK_USER, reply_markup=cancel_kb())
+            await call.message.answer(texts.ADMIN_ASK_USER_REVOKE, reply_markup=cancel_kb())
+
+    async def revoke_now(tg_id: int) -> str:
+        """Закрывает доступ и исключает человека из канала и чата."""
+        await db.upsert_user(tg_id)
+        await db.set_status(tg_id, "expired")
+        await access.kick(tg_id)
+        user = await db.get_user(tg_id)
+        return texts.ADMIN_REVOKED.format(user=human_username(user))
 
     @router.message(AdminStates.revoke_user, is_admin, F.text)
     async def revoke_user(message: Message, state: FSMContext) -> None:
@@ -505,12 +515,44 @@ def build_router(app: App) -> Router:
             await message.answer(texts.ADMIN_REVOKE_NOT_FOUND, reply_markup=back_to_panel_kb())
             return
         await db.upsert_user(int(tg_id))
-        await db.set_status(int(tg_id), "expired")
-        await access.kick(int(tg_id))
         user = user or await db.get_user(int(tg_id))
+        assert user is not None
         await message.answer(
-            texts.ADMIN_REVOKED.format(user=human_username(user)), reply_markup=back_to_panel_kb()
+            texts.ADMIN_REVOKE_CONFIRM.format(
+                user=human_username(user), tg_id=user["tg_id"]
+            ),
+            reply_markup=revoke_confirm_kb(int(user["tg_id"])),
         )
+
+    @router.callback_query(F.data.startswith("adm:revoke_ask:"), is_admin)
+    async def cb_revoke_ask(call: CallbackQuery) -> None:
+        """Кнопка «Забрать доступ» из карточки участника — с тем же подтверждением."""
+        raw = (call.data or "").split(":")[-1]
+        if not raw.lstrip("-").isdigit():
+            await call.answer("Не понял ID", show_alert=True)
+            return
+        await call.answer()
+        tg_id = int(raw)
+        await db.upsert_user(tg_id)
+        user = await db.get_user(tg_id)
+        if call.message is not None:
+            await call.message.answer(
+                texts.ADMIN_REVOKE_CONFIRM.format(
+                    user=human_username(user), tg_id=tg_id
+                ),
+                reply_markup=revoke_confirm_kb(tg_id),
+            )
+
+    @router.callback_query(F.data.startswith("adm:revoke_yes:"), is_admin)
+    async def cb_revoke_yes(call: CallbackQuery) -> None:
+        raw = (call.data or "").split(":")[-1]
+        if not raw.lstrip("-").isdigit():
+            await call.answer("Не понял ID", show_alert=True)
+            return
+        await call.answer("Забираю доступ…")
+        text = await revoke_now(int(raw))
+        if call.message is not None:
+            await call.message.answer(text, reply_markup=back_to_panel_kb())
 
     # --------------------------------------------- отмена автосписания
 
@@ -552,7 +594,7 @@ def build_router(app: App) -> Router:
         await state.set_state(AdminStates.find_user)
         await call.answer()
         if call.message is not None:
-            await call.message.answer(texts.ADMIN_ASK_USER, reply_markup=cancel_kb())
+            await call.message.answer(texts.ADMIN_ASK_USER_FIND, reply_markup=cancel_kb())
 
     @router.message(AdminStates.find_user, is_admin, F.text)
     async def find_user(message: Message, state: FSMContext) -> None:
