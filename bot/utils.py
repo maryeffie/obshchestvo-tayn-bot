@@ -38,10 +38,17 @@ def now_iso() -> str:
 
 
 def fmt_price(amount: int | float, currency: str = "rub") -> str:
-    """790 -> '790 ₽'."""
+    """790 -> '790 ₽', 11.68 USD -> '11.68 $'.
+
+    Дробные суммы (currency_sum) не округляем до целых: 11.68 нельзя показывать
+    как 12 $ и тем более как 790 $.
+    """
     symbols = {"rub": "₽", "usd": "$", "eur": "€", "kzt": "₸", "byn": "Br"}
-    amount = int(round(amount))
-    human = f"{amount:,}".replace(",", " ")
+    value = float(amount)
+    if value.is_integer():
+        human = f"{int(value):,}".replace(",", " ")
+    else:
+        human = f"{value:,.2f}".replace(",", " ").rstrip("0").rstrip(".")
     return f"{human} {symbols.get(currency.lower(), currency.upper())}"
 
 

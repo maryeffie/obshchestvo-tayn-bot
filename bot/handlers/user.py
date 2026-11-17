@@ -38,7 +38,6 @@ def build_router(app: App) -> Router:
     router = Router(name="user")
     settings = app.settings
     bot = app.bot
-    app_prodamus = app.prodamus
     db = app.db
     access = app.access
     payments = app.payments
@@ -116,7 +115,7 @@ def build_router(app: App) -> Router:
             return
         text = texts.FOREIGN_CHOOSE.format(days=settings.subscription_days)
         try:
-            # бессрочная ссылка Prodamus: валюта и сумма считаются на её стороне
+            # Режим формы задаётся настройками Prodamus.
             url, _amount, _order_id, _currency = await payments.create_foreign_link(
                 call.from_user.id
             )
@@ -177,15 +176,7 @@ def build_router(app: App) -> Router:
 
         tg_id = message.from_user.id
         await db.upsert_user(tg_id, message.from_user.username, message.from_user.first_name)
-        discount = max(1, settings.price - 1)
-        order_id = payments.new_order_id(tg_id)
-        await db.create_order(
-            order_id=order_id,
-            tg_id=tg_id,
-            amount=settings.price,
-            is_recurring=settings.is_recurrent,
-        )
-        url = app_prodamus.payment_url(tg_id, order_id, settings.price, discount)
+        url, _amount, _order_id, discount = await payments.create_test_payment_link(tg_id)
         await message.answer(
             texts.PAY1_LINK.format(
                 price=price_label,

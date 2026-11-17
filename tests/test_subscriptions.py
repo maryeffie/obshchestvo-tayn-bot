@@ -234,8 +234,11 @@ def test_deactivation_webhook_turns_off_autorenew() -> None:
         await app.db.upsert_user(609, "user609", "Тест")
         await app.db.activate(609, utcnow() + timedelta(days=12), source="prodamus")
 
+        await app.db.save_contacts(609, "+79995554433", None)
+        await app.db._write("UPDATE users SET phone_verified=1 WHERE tg_id=609")
         result = await app.payments.handle(
             {
+                "customer_phone": "+79995554433",
                 "type": "action",
                 "action_code": "deactivation",
                 "active": "0",
@@ -265,7 +268,8 @@ def test_new_payment_reenables_autorenew() -> None:
         _url, _amount, order_id, _d = await app.payments.create_payment_link(610)
         await app.payments.handle(
             {
-                "order_id": order_id,
+                "order_id": "prodamus-" + order_id,
+                "order_num": order_id,
                 "payment_status": "success",
                 "sum": "790",
                 "customer_extra": "tg:610",

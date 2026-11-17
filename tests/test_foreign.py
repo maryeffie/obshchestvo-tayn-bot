@@ -40,7 +40,7 @@ def test_paywall_offers_other_currency_with_universal_link() -> None:
         url_button = sent["keyboard"].inline_keyboard[0][0]
         assert url_button.url.startswith("https://payform.ru/g7d0lTx/?")
         params = _params(url_button.url)
-        assert params["customer_extra"] == "tg:801"      # по нему найдём человека
+        assert params["customer_extra"] == "order:" + params["order_id"]
         assert params["order_id"].startswith("tg801-")
         assert "subscription" not in params              # разовый платёж, без автосписания
         # после оплаты Prodamus возвращает человека в чат с ботом
@@ -67,9 +67,11 @@ def test_foreign_payment_grants_month_without_autorenew() -> None:
         # Prodamus присылает платёж в валюте плательщика — 9 евро
         result = await app.payments.handle(
             {
-                "order_id": order_id,
+                "order_id": "prodamus-" + order_id,
+                "order_num": order_id,
                 "payment_status": "success",
-                "sum": "9",
+                "sum": "790",
+                "currency_sum": "11.68",
                 "currency": "eur",
                 "customer_extra": "tg:802",
             }
@@ -85,7 +87,7 @@ def test_foreign_payment_grants_month_without_autorenew() -> None:
         assert len(app.bot.invites) == 2
 
         # админу показали валюту, в статистике остались рубли
-        assert "9 €" in app.bot.last_to(111)["text"]
+        assert "11.68 €" in app.bot.last_to(111)["text"]
         stats = await app.db.stats()
         assert stats["revenue_total"] == 790
 

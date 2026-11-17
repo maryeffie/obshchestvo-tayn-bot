@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import html
 import json
 import logging
 from urllib.parse import parse_qs
@@ -11,7 +9,6 @@ from urllib.parse import parse_qs
 from aiohttp import web
 
 from .app import App
-from .keyboards import quick_grant_kb
 
 log = logging.getLogger(__name__)
 
@@ -26,25 +23,23 @@ def create_webhook_app(app: App) -> web.Application:
         headers = dict(request.headers)
         content_type = (request.content_type or "").lower()
 
-        try:
-            raw = await request.read()
-        except Exception:  # noqa: BLE001
-            raw = b""
-
+        raw = b""
         data: dict = {}
         try:
-            if "json" in content_type:
-                payload = json.loads(raw.decode("utf-8", "replace")) if raw else {}
-                data = (
-                    {str(k): v for k, v in payload.items()}
-                    if isinstance(payload, dict)
-                    else {}
-                )
+            if "multipart/form-data" in content_type:
+                # request.read() consumes the multipart stream; parse it first.
+                parsed_form = await request.post()
+                data = {str(k): str(v) for k, v in parsed_form.items()}
             else:
-                parsed = parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True)
-                data = {k: v[0] for k, v in parsed.items()}
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Не удалось разобрать тело вебхука: %s", exc)
+                raw = await request.read()
+                if "json" in content_type:
+                    payload = json.loads(raw.decode("utf-8", "replace")) if raw else {}
+                    data = {str(k): v for k, v in payload.items()} if isinstance(payload, dict) else {}
+                else:
+                    parsed = parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True)
+                    data = {k: v[0] for k, v in parsed.items()}
+        except Exception:  # noqa: BLE001
+            log.warning("Не удалось разобрать тело вебхука")
             data = {}
 
         if not data:
@@ -67,54 +62,24 @@ def create_webhook_app(app: App) -> web.Application:
 
         # 1) штатная проверка (нормализованный JSON), 2) по сырому телу запроса
         verified = app.prodamus.verify_request(data, headers, raw)
-        if not verified and raw:
+        if not verified:
             verified = app.prodamus.verify_raw(raw, signature, data)
 
-        if not verified and not (expected_token and token_ok):
-            # Подпись не сошлась, а секретного token нет: автоматически засчитывать
-            # нельзя — такую ссылку легко подделать. Отдаём админу кнопку в один клик.
-            order_id = str(data.get("order_num") or data.get("order_id") or "")
-            order = await app.db.get_order(order_id) if order_id else None
-            tg_id = int(order["tg_id"]) if order else None
-            if tg_id is None:
-                digits = "".join(ch for ch in str(data.get("customer_extra") or "") if ch.isdigit())
-                if digits:
-                    tg_id = int(digits)
-            log.error(
-                "Вебхук с неверной подписью. content-type=%s, заголовки=%s, Sign=%s, тело=%s",
-                content_type,
-                sorted(headers.keys()),
-                (str(signature)[:8] + "…") if signature else "нет",
-                raw[:1200].decode("utf-8", "replace"),
-            )
-            text = (
-                "⚠️ <b>Платёж пришёл, но подпись не сошлась</b>\n\n"
-                f"Заказ: <code>{order_id or '—'}</code>\n"
-                f"ID участника: <code>{tg_id or '—'}</code>\n"
-                f"Сумма: {data.get('sum') or '—'} {data.get('currency') or ''}\n"
-                f"Телефон: {data.get('customer_phone') or '—'}\n\n"
-                "Проверьте платёж в кабинете Prodamus. Если деньги пришли — нажмите "
-                "кнопку, доступ откроется сам.\n\n"
-                "<i>Технические детали для разработчика:</i>\n"
-                f"<code>{html.escape(raw[:500].decode('utf-8', 'replace'))}</code>"
-            )
-            for admin_id in app.settings.all_admin_ids:
-                try:
-                    await app.bot.send_message(
-                        admin_id,
-                        text,
-                        reply_markup=quick_grant_kb(tg_id) if tg_id else None,
-                    )
-                except Exception:  # noqa: BLE001
-                    log.warning("Не удалось предупредить админа %s", admin_id)
-            return web.Response(status=200, text="success")
-
         if not verified:
-            log.warning(
-                "Подпись не сошлась, но адрес содержит верный token — платёж засчитан"
+            # Данные без подписи недостоверны, даже предлагаемый ID получателя.
+            log.error("Вебхук с неверной подписью отклонён")
+            await app.access.notify_admins(
+                "⚠️ <b>Уведомление Prodamus отклонено: неверная подпись.</b>\n"
+                "Проверьте платёж в кабинете и настройки подписи. Доступ не выдан."
             )
+            return web.Response(status=403, text="error: invalid signature")
 
-        asyncio.create_task(_process(app, data))
+        try:
+            result = await app.payments.handle(data)
+            log.info("Вебхук обработан: %s", result)
+        except Exception:  # noqa: BLE001
+            log.exception("Ошибка обработки вебхука Prodamus")
+            return web.Response(status=500, text="error: processing failed")
         return web.Response(status=200, text="success")
 
     async def webhook_probe(request: web.Request) -> web.Response:
@@ -133,24 +98,6 @@ def create_webhook_app(app: App) -> web.Application:
     application.on_startup.append(on_startup)
     return application
 
-
-async def _process(app: App, data: dict) -> None:
-    """Обрабатываем уведомление в отдельной задаче, чтобы быстро ответить 200."""
-    try:
-        result = await app.payments.handle(data)
-        log.info("Вебхук обработан: %s (order_id=%s)", result, data.get("order_id"))
-    except Exception:  # noqa: BLE001
-        log.exception("Ошибка обработки вебхука Prodamus")
-        await app.access.notify_admins(
-            "⚠️ <b>Ошибка обработки платежа.</b>\n\n"
-            f"order_id: <code>{data.get('order_id')}</code>\n"
-            "Подробности — в логах. Проверьте, выдан ли доступ."
-        )
-
-
-def _short(data: dict) -> dict:
-    keep = ("order_id", "payment_status", "sum", "subscription", "customer_extra")
-    return {k: v for k, v in data.items() if k in keep} or {"keys": list(data)[:10]}
 
 
 __all__ = ["create_webhook_app"]

@@ -243,7 +243,7 @@ class AccessService:
     async def notify_payment(
         self,
         tg_id: int,
-        amount: int,
+        amount: int | float,
         *,
         renewal: bool = False,
         promo_code: str | None = None,

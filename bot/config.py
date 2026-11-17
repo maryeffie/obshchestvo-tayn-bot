@@ -143,6 +143,8 @@ class Settings:
     log_level: str
     # администраторы, добавленные прямо в боте (кнопка «👥 Администраторы»)
     extra_admin_ids: set[int] = field(default_factory=set)
+    # Включать только после проверки зарубежного способа оплаты на основной форме.
+    prodamus_foreign_dynamic: bool = False
 
     @property
     def webhook_url(self) -> str:
@@ -197,6 +199,7 @@ def load_settings() -> Settings:
         prodamus_foreign_url=_switchable(
             "PRODAMUS_FOREIGN_URL", "https://payform.ru/g7d0lTx/"
         ),
+        prodamus_foreign_dynamic=_bool("PRODAMUS_FOREIGN_DYNAMIC", False),
         webhook_host=_raw("WEBHOOK_HOST", "0.0.0.0"),
         webhook_port=_int("WEBHOOK_PORT", _int("PORT", 8080)),
         webhook_path=_normalize_path(_raw("WEBHOOK_PATH", "/prodamus/webhook")),

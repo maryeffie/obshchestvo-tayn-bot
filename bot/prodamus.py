@@ -24,6 +24,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -57,8 +58,6 @@ CANCELLED_STATUSES = {
     "stopped",
 }
 
-TG_IN_EXTRA = re.compile(r"tg[:=](\d+)", re.IGNORECASE)
-TG_IN_ORDER = re.compile(r"^tg(\d+)-", re.IGNORECASE)
 
 
 # --------------------------------------------------------------------- подпись
@@ -125,10 +124,19 @@ def verify_signature(payload: Any, secret: str, signature: str | None) -> bool:
 @dataclass
 class Notification:
     kind: str                      # paid | failed | cancelled | info
+    # order_id — номер заказа в нашей системе (merchant order number).
+    # В webhook Prodamus возвращает его как order_num, а свой внутренний
+    # числовой ID — как order_id. Внутренний ID никогда не является ID
+    # заказа бота и не используется для поиска в БД.
     order_id: str | None = None
+    prodamus_order_id: str | None = None  # внутренний ID Prodamus (webhook order_id)
+    extra_order_id: str | None = None  # только точный маркер order:<локальный ID>
     tg_id: int | None = None
-    amount: int | None = None
-    currency: str | None = None
+    amount: int | None = None      # округлённая сумма заказа, для совместимости
+    order_sum: float | None = None  # сумма заказа (webhook sum) без округления
+    charged_amount: float | None = None  # фактически списанная сумма (webhook currency_sum)
+    charged_currency: str | None = None  # валюта списания (webhook currency)
+    currency: str | None = None    # валюта списания (алиас charged_currency)
     phone: str | None = None
     email: str | None = None
     is_subscription: bool = False
@@ -158,6 +166,16 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _to_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        number = float(str(value).replace(" ", "").replace(",", "."))
+        return number if math.isfinite(number) and number >= 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
 @dataclass
 class SubscriptionResult:
     ok: bool
@@ -180,6 +198,8 @@ class ProdamusClient:
         base_amount: int,
         discount: int = 0,
         currency: str | None = None,
+        *,
+        one_time: bool = False,
     ) -> str:
         """Формирует ссылку на платёжную форму.
 
@@ -194,26 +214,29 @@ class ProdamusClient:
         foreign = currency != "rub"
         data: dict[str, Any] = {
             "do": "pay",
-            # Prodamus возвращает собственный числовой order_id; order_num —
-            # наш стабильный ключ для поиска локального заказа в webhook.
+            # По документации Prodamus параметр ссылки order_id — номер заказа
+            # в нашей системе. В webhook Prodamus возвращает его как order_num,
+            # а свой внутренний числовой ID — как order_id. Именно order_num
+            # является стабильным ключом для поиска локального заказа.
+            # Параметр order_num в ссылке не документирован и не передаётся.
             "order_id": order_id,
-            "order_num": order_id,
-            # Дополнительная страховка на случай, если один из идентификаторов потеряется.
-            "customer_extra": f"tg:{tg_id}",
+            # Резервный точный номер заказа, не просто Telegram ID. Форма может
+            # перезаписать примечание; возврат необходимо подтвердить webhook-ом.
+            "customer_extra": f"order:{order_id}",
         }
         if foreign:
             data["currency"] = currency
         if self.settings.prodamus_sys:
             data["sys"] = self.settings.prodamus_sys
-        if self.settings.prodamus_send_tg_user_id:
-            # по этому полю Prodamus сам привяжет подписку к нашему пользователю
-            data["tg_user_id"] = str(tg_id)
+        # tg_user_id в документации платёжной ссылки не описан как возвращаемое
+        # поле webhook (он документирован только для Rest API setActivity).
+        # Не передаём его в ссылку и не полагаемся на него для сопоставления.
         if self.settings.prodamus_url_success:
             data["urlSuccess"] = self.settings.prodamus_url_success
         if self.settings.prodamus_url_return:
             data["urlReturn"] = self.settings.prodamus_url_return
 
-        if self.settings.is_recurrent and not foreign:
+        if self.settings.is_recurrent and not foreign and not one_time:
             data["subscription"] = str(self.settings.prodamus_subscription_id)
             if discount:
                 data["discount_value"] = str(discount)
@@ -249,16 +272,16 @@ class ProdamusClient:
         base = self.settings.prodamus_foreign_url
         if not base:
             return None
-        # Передаём несколько независимых ключей: Prodamus может заменить
-        # order_id своим числом, а customer_extra — текстом из настроек формы.
-        # order_num и tg_user_id остаются однозначными способами связать платёж.
+        # Передаём только документированные поля: order_id (номер заказа в нашей
+        # системе, возвращается как order_num) и customer_extra (возвращается,
+        # но на бессрочной ссылке может перезаписываться текстом формы).
+        # Недокументированные order_num/tg_user_id в ссылке не передаём.
+        # ВНИМАНИЕ: добавление параметра в URL само по себе не гарантирует его
+        # возврата — это должно подтвердить тестовый webhook на живой форме.
         data: dict[str, Any] = {
             "order_id": order_id,
-            "order_num": order_id,
-            "customer_extra": f"tg:{tg_id}",
+            "customer_extra": f"order:{order_id}",
         }
-        if self.settings.prodamus_send_tg_user_id:
-            data["tg_user_id"] = str(tg_id)
         if self.settings.prodamus_url_success:
             data["urlSuccess"] = self.settings.prodamus_url_success
         if self.settings.prodamus_url_return:
@@ -353,18 +376,6 @@ class ProdamusClient:
         secret = self.settings.prodamus_secret.encode("utf-8")
 
         candidates: list[bytes] = [raw_body]
-        submit = data.get("submit")
-        if isinstance(submit, str) and submit:
-            candidates.append(submit.encode("utf-8"))
-            try:
-                parsed = json.loads(submit)
-            except json.JSONDecodeError:
-                parsed = None
-            if isinstance(parsed, dict):
-                candidates.extend(self._sign_variants(parsed))
-        elif isinstance(submit, dict):
-            candidates.extend(self._sign_variants(submit))
-
         cleaned = {k: v for k, v in data.items() if k not in {"signature", "sign"}}
         candidates.extend(self._sign_variants(cleaned))
         nested = self._unflatten(cleaned)
@@ -380,21 +391,9 @@ class ProdamusClient:
     def verify_request(self, form: dict, headers: dict, raw_body: bytes | None = None) -> bool:
         """Проверяет подпись с учётом разных вариантов тела запроса."""
         signature = _header(headers, "Sign") or form.get("signature") or form.get("sign")
-        candidates: list[dict] = []
-
-        submit = form.get("submit")
-        if isinstance(submit, str):
-            try:
-                parsed = json.loads(submit)
-                if isinstance(parsed, dict):
-                    candidates.append(parsed)
-            except json.JSONDecodeError:
-                pass
-        elif isinstance(submit, dict):
-            candidates.append(submit)
-
-        candidates.append(form)
-        candidates.append({k: v for k, v in form.items() if k not in {"signature", "sign"}})
+        # Проверяем именно поля, которые затем будут обработаны, а не вложенный
+        # submit с независимой подписью и неподписанные поля снаружи.
+        candidates = [form, {k: v for k, v in form.items() if k not in {"signature", "sign"}}]
 
         for candidate in candidates:
             if candidate and self.verify(candidate, signature):
@@ -416,39 +415,52 @@ class ProdamusClient:
         error_code = _first(data, "error_code")
         active_flag = str(_first(data, "active") or "").strip().lower()
         subscription_id = _first(data, "subscription", "subscription_id")
-        order_id = _first(data, "order_id", "order_num")
-        order_id = str(order_id) if order_id not in (None, "") else None
+        # По документации Prodamus:
+        # - webhook order_id — внутренний ID заказа в системе Prodamus;
+        # - webhook order_num — номер заказа на стороне магазина (значение,
+        #   которое мы передавали как order_id в платёжной ссылке).
+        # Внутренний ID никогда не является ID заказа бота.
+        prodamus_order_id = _first(data, "order_id")
+        prodamus_order_id = (
+            str(prodamus_order_id) if prodamus_order_id not in (None, "") else None
+        )
+        merchant_order_num = _first(data, "order_num")
+        merchant_order_num = (
+            str(merchant_order_num) if merchant_order_num not in (None, "") else None
+        )
+        # order_id уведомления — merchant-номер (для поиска в БД). Если order_num
+        # пуст (например, автоплатёж подписки), оставляем None: внутренний ID
+        # Prodamus как ID заказа бота не используем.
+        order_id = merchant_order_num
+        # Только наш полный уникальный номер заказа, не поиск цифр в тексте.
+        # Произвольные примечания (включая старый tg:<id>) не сопоставляются.
+        extra = str(_first(data, "customer_extra") or "").strip()
+        marker = re.fullmatch(r"order:(tg[1-9][0-9]*-[0-9a-f]{12})", extra)
+        extra_order_id = marker.group(1) if marker else None
 
-        extra = str(_first(data, "customer_extra", "customer_note") or "")
+        # tg_user_id не документирован для платёжных webhook. Если он пришёл,
+        # используем его только для точного поиска заказа, не как самостоятельное
+        # доказательство оплаты или извлечения ID из текста формы.
         tg_id = None
         raw_tg_id = _first(data, "tg_user_id")
-        if raw_tg_id is not None:
-            try:
-                candidate_tg_id = int(str(raw_tg_id).strip())
-            except ValueError:
-                candidate_tg_id = 0
-            if candidate_tg_id > 0:
-                tg_id = candidate_tg_id
-        if tg_id is None:
-            match = TG_IN_EXTRA.search(extra)
-            if match:
-                tg_id = int(match.group(1))
-        if tg_id is None:
-            # Prodamus может вернуть свой числовой order_id и наш переданный
-            # идентификатор отдельно в order_num. Проверяем оба поля.
-            for candidate in (data.get("order_num"), data.get("order_id")):
-                if candidate in (None, ""):
-                    continue
-                match = TG_IN_ORDER.match(str(candidate))
-                if match:
-                    tg_id = int(match.group(1))
-                    break
+        if raw_tg_id is not None and str(raw_tg_id).strip().isdigit():
+            candidate = int(str(raw_tg_id).strip())
+            if candidate > 0:
+                tg_id = candidate
 
-        amount = _to_int(
+        # sum — сумма заказа (в рублях). currency_sum — фактически списанная
+        # сумма в валюте (currency). Их нельзя смешивать: 790.00 RUB != 790 USD.
+        order_sum = _to_float(
             _first(data, "sum", "order_sum", "payment_sum", "amount", "products[0][price]")
         )
-        if amount is None and isinstance(data.get("products"), list) and data["products"]:
-            amount = _to_int(data["products"][0].get("price"))
+        if order_sum is None and isinstance(data.get("products"), list) and data["products"]:
+            order_sum = _to_float(data["products"][0].get("price"))
+        amount = int(round(order_sum)) if order_sum is not None else None
+        charged_amount = _to_float(_first(data, "currency_sum"))
+        charged_currency = _first(data, "currency", "currency_code")
+        charged_currency = (
+            str(charged_currency).strip().lower() if charged_currency not in (None, "") else None
+        )
 
         kind = "info"
         if payment_status in PAID_STATUSES:
@@ -481,9 +493,14 @@ class ProdamusClient:
         return Notification(
             kind=kind,
             order_id=order_id,
+            prodamus_order_id=prodamus_order_id,
+            extra_order_id=extra_order_id,
             tg_id=tg_id,
             amount=amount,
-            currency=(str(_first(data, "currency", "currency_code") or "") or None),
+            order_sum=order_sum,
+            charged_amount=charged_amount,
+            charged_currency=charged_currency,
+            currency=charged_currency,
             phone=_first(data, "customer_phone"),
             email=_first(data, "customer_email"),
             is_subscription=bool(subscription_id),
@@ -523,9 +540,9 @@ class ProdamusClient:
         if tg_user_id:
             attempts.append((f"tg_user_id={tg_user_id}", {"tg_user_id": str(tg_user_id)}))
         if phone:
-            attempts.append((f"customer_phone={phone}", {"customer_phone": phone}))
+            attempts.append(("customer_phone", {"customer_phone": phone}))
         if email:
-            attempts.append((f"customer_email={email}", {"customer_email": email}))
+            attempts.append(("customer_email", {"customer_email": email}))
         if not attempts:
             return SubscriptionResult(ok=False, message="Нет идентификатора клиента", remote=False)
 
@@ -544,11 +561,11 @@ class ProdamusClient:
                     async with session.post(self.rest_url("setActivity"), data=data) as response:
                         body = (await response.text()).strip()
                 if "success" in body.lower():
-                    return SubscriptionResult(ok=True, message=body, tried=label)
-                last_error = f"HTTP {response.status}: {body[:200]}"
+                    return SubscriptionResult(ok=True, message="success", tried=label)
+                last_error = f"HTTP {response.status}: запрос отклонён"
                 log.warning("setActivity (%s) вернул: %s", label, last_error)
             except Exception as exc:  # noqa: BLE001 — сеть может быть недоступна
-                last_error = f"{type(exc).__name__}: {exc}"
+                last_error = f"{type(exc).__name__}: ошибка запроса"
                 log.warning("setActivity (%s) не удался: %s", label, last_error)
 
         return SubscriptionResult(ok=False, message=last_error, tried=attempts[-1][0])
