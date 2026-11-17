@@ -73,6 +73,240 @@ def test_paid_webhook_grants_access() -> None:
     asyncio.run(scenario())
 
 
+def test_paid_webhook_resolves_user_from_order_num_without_customer_extra() -> None:
+    """Prodamus order_id may be numeric; order_num identifies our local order."""
+
+    async def scenario() -> None:
+        app = await make_app()
+        tg_id = 565
+        await app.db.upsert_user(tg_id, "order_num_user", "Тест")
+        _url, _amount, order_id, _discount = await app.payments.create_payment_link(tg_id)
+
+        result = await app.payments.handle(
+            {
+                "order_id": "51250997",
+                "order_num": order_id,
+                "payment_status": "success",
+                "sum": "790",
+                "customer_phone": "+353871234567",
+            }
+        )
+
+        assert result == "paid"
+        user = await app.db.get_user(tg_id)
+        assert user is not None and user["status"] == "active"
+        assert len(app.bot.invites) == 2
+        payment = await app.db.last_successful_payment(tg_id)
+        assert payment is not None and payment["tg_id"] == tg_id
+        order = await app.db.get_order(order_id)
+        assert order is not None and order["status"] == "paid"
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_paid_webhook_resolves_from_tg_user_id_without_order_num() -> None:
+    async def scenario() -> None:
+        app = await make_app()
+        tg_id = 567
+        await app.db.upsert_user(tg_id, "tg_user_id_user", "Тест")
+
+        result = await app.payments.handle(
+            {
+                "order_id": "51283964",
+                "tg_user_id": str(tg_id),
+                "payment_status": "success",
+                "sum": "790",
+                "customer_phone": "+79990001123",
+            }
+        )
+
+        assert result == "paid"
+        user = await app.db.get_user(tg_id)
+        assert user is not None and user["status"] == "active"
+        payment = await app.db.last_successful_payment(tg_id)
+        assert payment is not None and payment["tg_id"] == tg_id
+        assert len(app.bot.invites) == 2
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_paid_webhook_resolves_local_order_num_even_without_telegram_marker() -> None:
+    """A matched local order is authoritative even if order_num has no tg ID."""
+
+    async def scenario() -> None:
+        app = await make_app()
+        tg_id = 566
+        await app.db.upsert_user(tg_id, "order_lookup_user", "Тест")
+        order_id = "club-order-566"
+        await app.db.create_order(
+            order_id=order_id,
+            tg_id=tg_id,
+            amount=790,
+            is_recurring=True,
+        )
+
+        result = await app.payments.handle(
+            {
+                "order_id": "51250998",
+                "order_num": order_id,
+                "payment_status": "success",
+                "sum": "790",
+            }
+        )
+
+        assert result == "paid"
+        user = await app.db.get_user(tg_id)
+        assert user is not None and user["status"] == "active"
+        assert len(app.bot.invites) == 2
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_startup_reconciliation_recovers_recent_unlinked_payment() -> None:
+    async def scenario() -> None:
+        app = await make_app()
+        tg_id = 570
+        await app.db.upsert_user(tg_id, "recovered_user", "Тест")
+        _url, _amount, order_id, _currency = await app.payments.create_foreign_link(tg_id)
+        payload = {
+            "date": utcnow().isoformat(),
+            "order_id": "51283966",
+            "order_num": "",
+            "payment_status": "success",
+            "sum": "790.00",
+            "currency": "usd",
+            "customer_extra": "Инструкция по оплате зарубежной картой",
+        }
+        await app.db.add_payment(
+            order_id=payload["order_id"],
+            tg_id=None,
+            amount=790,
+            kind="paid",
+            raw=payload,
+        )
+
+        assert await app.payments.reconcile_unlinked_paid_payments() == 1
+        user = await app.db.get_user(tg_id)
+        order = await app.db.get_order(order_id)
+        assert user is not None and user["status"] == "active"
+        assert order is not None and order["status"] == "paid"
+        assert len(app.bot.invites) == 2
+
+        # Повторное восстановление уже привязанного события ничего не продлевает.
+        paid_until = user["paid_until"]
+        assert await app.payments.reconcile_unlinked_paid_payments() == 0
+        user_after_retry = await app.db.get_user(tg_id)
+        assert user_after_retry is not None and user_after_retry["paid_until"] == paid_until
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_foreign_payment_with_stripped_ids_matches_its_unique_recent_order() -> None:
+    """Без ID в webhook связываем только один свежий foreign-заказ той же суммы."""
+
+    async def scenario() -> None:
+        app = await make_app()
+        tg_id = 568
+        await app.db.upsert_user(tg_id, "foreign_user", "Тест")
+        _url, _amount, order_id, _currency = await app.payments.create_foreign_link(tg_id)
+        payload = {
+            "date": utcnow().isoformat(),
+            "order_id": "51283964",
+            "order_num": "",
+            "payment_status": "success",
+            "sum": "790.00",
+            "currency": "usd",
+            "customer_extra": "Инструкция по оплате зарубежной картой",
+            "customer_phone": "+79990009991",
+            "customer_email": "unmatched@example.com",
+            "payment_init": "manual",
+        }
+
+        result = await app.payments.handle(payload)
+        assert result == "paid"
+        user = await app.db.get_user(tg_id)
+        assert user is not None and user["status"] == "active"
+        order = await app.db.get_order(order_id)
+        assert order is not None and order["status"] == "paid"
+        assert len(app.bot.invites) == 2
+
+        # Повторная доставка того же уведомления не продлевает доступ второй раз.
+        paid_until = user["paid_until"]
+        assert await app.payments.handle(payload) == "duplicate"
+        user_after_retry = await app.db.get_user(tg_id)
+        assert user_after_retry is not None and user_after_retry["paid_until"] == paid_until
+        assert len(app.bot.invites) == 2
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_foreign_payment_with_ambiguous_recent_orders_is_not_guessed() -> None:
+    async def scenario() -> None:
+        app = await make_app()
+        for tg_id in (568, 569):
+            await app.db.upsert_user(tg_id, f"foreign_{tg_id}", "Тест")
+            await app.payments.create_foreign_link(tg_id)
+
+        result = await app.payments.handle(
+            {
+                "date": utcnow().isoformat(),
+                "order_id": "51283965",
+                "order_num": "",
+                "payment_status": "success",
+                "sum": "790.00",
+                "currency": "usd",
+                "customer_extra": "Инструкция по оплате зарубежной картой",
+            }
+        )
+
+        assert result == "unknown-user"
+        assert len(app.bot.invites) == 0
+        assert (await app.db.get_user(568))["status"] == "new"
+        assert (await app.db.get_user(569))["status"] == "new"
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
+def test_unknown_user_warning_includes_escaped_mapping_fields() -> None:
+    async def scenario() -> None:
+        app = await make_app()
+        result = await app.payments.handle(
+            {
+                "order_id": "51283964",
+                "order_num": "missing-order",
+                "customer_extra": "<test>&",
+                "payment_status": "success",
+                "sum": "790",
+            }
+        )
+
+        assert result == "unknown-user"
+        warning = next(
+            text
+            for message in app.bot.sent
+            if "Платёж пришёл, но пользователя не удалось определить" in (text := message["text"])
+        )
+        assert "order_id: <code>51283964</code>" in warning
+        assert "order_num: <code>missing-order</code>" in warning
+        assert "customer_extra: <code>&lt;test&gt;&amp;</code>" in warning
+
+        await app.db.close()
+
+    asyncio.run(scenario())
+
+
 def test_duplicate_webhook_is_ignored() -> None:
     async def scenario() -> None:
         app = await make_app()

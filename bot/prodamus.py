@@ -194,8 +194,11 @@ class ProdamusClient:
         foreign = currency != "rub"
         data: dict[str, Any] = {
             "do": "pay",
+            # Prodamus возвращает собственный числовой order_id; order_num —
+            # наш стабильный ключ для поиска локального заказа в webhook.
             "order_id": order_id,
-            # страховка: даже если order_id потеряется, по этому полю найдём человека
+            "order_num": order_id,
+            # Дополнительная страховка на случай, если один из идентификаторов потеряется.
             "customer_extra": f"tg:{tg_id}",
         }
         if foreign:
@@ -246,11 +249,16 @@ class ProdamusClient:
         base = self.settings.prodamus_foreign_url
         if not base:
             return None
-        # минимум параметров: всё лишнее Prodamus может не принять на бессрочной ссылке
+        # Передаём несколько независимых ключей: Prodamus может заменить
+        # order_id своим числом, а customer_extra — текстом из настроек формы.
+        # order_num и tg_user_id остаются однозначными способами связать платёж.
         data: dict[str, Any] = {
             "order_id": order_id,
+            "order_num": order_id,
             "customer_extra": f"tg:{tg_id}",
         }
+        if self.settings.prodamus_send_tg_user_id:
+            data["tg_user_id"] = str(tg_id)
         if self.settings.prodamus_url_success:
             data["urlSuccess"] = self.settings.prodamus_url_success
         if self.settings.prodamus_url_return:
@@ -413,13 +421,28 @@ class ProdamusClient:
 
         extra = str(_first(data, "customer_extra", "customer_note") or "")
         tg_id = None
-        match = TG_IN_EXTRA.search(extra)
-        if match:
-            tg_id = int(match.group(1))
-        elif order_id:
-            match = TG_IN_ORDER.match(order_id)
+        raw_tg_id = _first(data, "tg_user_id")
+        if raw_tg_id is not None:
+            try:
+                candidate_tg_id = int(str(raw_tg_id).strip())
+            except ValueError:
+                candidate_tg_id = 0
+            if candidate_tg_id > 0:
+                tg_id = candidate_tg_id
+        if tg_id is None:
+            match = TG_IN_EXTRA.search(extra)
             if match:
                 tg_id = int(match.group(1))
+        if tg_id is None:
+            # Prodamus может вернуть свой числовой order_id и наш переданный
+            # идентификатор отдельно в order_num. Проверяем оба поля.
+            for candidate in (data.get("order_num"), data.get("order_id")):
+                if candidate in (None, ""):
+                    continue
+                match = TG_IN_ORDER.match(str(candidate))
+                if match:
+                    tg_id = int(match.group(1))
+                    break
 
         amount = _to_int(
             _first(data, "sum", "order_sum", "payment_sum", "amount", "products[0][price]")
