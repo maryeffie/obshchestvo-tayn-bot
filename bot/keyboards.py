@@ -142,6 +142,7 @@ def admin_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🎁 Выдать доступ", callback_data="adm:grant"),
             InlineKeyboardButton(text="🚫 Забрать доступ", callback_data="adm:revoke"),
         ],
+        [InlineKeyboardButton(text="📅 Установить дату доступа", callback_data="adm:date")],
         [InlineKeyboardButton(text="👤 Найти участника", callback_data="adm:find")],
         [InlineKeyboardButton(text="👥 Администраторы", callback_data="adm:admins")],
         [
@@ -197,6 +198,7 @@ def user_card_kb(tg_id: int) -> InlineKeyboardMarkup:
                 text="🎁 Выдать доступ на 30 дней", callback_data=f"adm:quickgrant:{tg_id}"
             )
         ],
+        [InlineKeyboardButton(text="📅 Установить дату доступа", callback_data=f"adm:date:{tg_id}")],
         [
             InlineKeyboardButton(
                 text="🚫 Забрать доступ", callback_data=f"adm:revoke_ask:{tg_id}"
@@ -219,6 +221,13 @@ def revoke_confirm_kb(tg_id: int) -> InlineKeyboardMarkup:
             )
         ],
         [InlineKeyboardButton(text="↩️ Оставить как есть", callback_data="adm:panel")],
+    )
+
+
+def date_confirm_kb() -> InlineKeyboardMarkup:
+    return _kb(
+        [InlineKeyboardButton(text="✅ Подтвердить дату", callback_data="adm:date_confirm")],
+        [InlineKeyboardButton(text="Отмена", callback_data="adm:panel")],
     )
 
 

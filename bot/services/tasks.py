@@ -74,7 +74,11 @@ class ScheduledTasks:
             if stage <= int(user.get("reminder_stage") or 0):
                 continue
 
-            grace = timedelta(days=self.settings.grace_days if user.get("auto_renew", 1) else 0)
+            grace = timedelta(
+                days=self.settings.grace_days
+                if user.get("auto_renew", 1) and not user.get("exact_access_end", 0)
+                else 0
+            )
             if now > paid_until + grace:
                 # доступ уже пора закрывать — не шлём «продлите», этим займётся авто-кик
                 await self.db.set_reminder_stage(user["tg_id"], stage, user["paid_until"])
@@ -99,7 +103,8 @@ class ScheduledTasks:
         if self.payments is None:
             return None, None
         try:
-            url, amount, _order_id, currency = await self.payments.create_link_auto(tg_id)
+            url, amount, order_id, currency = await self.payments.create_link_auto(tg_id)
+            url = await self.payments.checkout_button_url(order_id, url)
             return url, fmt_price(amount, currency)
         except Exception:  # noqa: BLE001 — напоминание важнее кнопки
             log.exception("Не удалось создать ссылку на оплату для напоминания")
@@ -115,11 +120,12 @@ class ScheduledTasks:
             paid_until = from_iso(user.get("paid_until"))
             if paid_until is None:
                 continue
-            # отсрочка нужна только тем, кто ждёт автоплатёж.
-            # Отменившим подписку доступ закрываем ровно в дату окончания.
+            # Явная дата от администратора действует без отсрочки. Обычная
+            # оплаченная подписка сохраняет отсрочку при ожидаемом автоплатеже.
             auto_renew = bool(user.get("auto_renew", 1))
+            exact = bool(user.get("exact_access_end", 0))
             deadline = paid_until + timedelta(
-                days=self.settings.grace_days if auto_renew else 0
+                days=self.settings.grace_days if auto_renew and not exact else 0
             )
             if deadline > now:
                 continue

@@ -171,6 +171,16 @@ class FakeApp:
         )
 
 
+async def checkout_destination(app: FakeApp, url: str) -> str:
+    """Получаем сохранённую ссылку для проверок параметров платёжной формы."""
+    from urllib.parse import urlsplit
+
+    token = urlsplit(url).path.rsplit("/", 1)[-1]
+    order = await app.db.get_order_by_checkout_token(token)
+    assert order and order["checkout_url"]
+    return order["checkout_url"]
+
+
 async def make_app(**overrides) -> FakeApp:
     settings = make_settings(**overrides)
     db = Database(settings.db_path)

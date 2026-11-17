@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from bot.handlers import admin as admin_handlers
 from bot.handlers import user as user_handlers
 
-from .helpers import ButtonTexts, buttons_of, make_app
+from .helpers import ButtonTexts, buttons_of, checkout_destination, make_app
 
 
 class FakeMessage:
@@ -108,8 +108,10 @@ def test_start_and_join_flow() -> None:
         assert "Остался всего один шаг!" in paywall["text"]
         assert "Оплатить в рублях 790 ₽" in _buttons(paywall["keyboard"])
         url_button = paywall["keyboard"].inline_keyboard[0][0]
-        assert url_button.url.startswith("https://demo.payform.ru/?")
-        assert "subscription=4242" in url_button.url
+        assert url_button.url.startswith("https://bot.example.com/checkout/")
+        destination = await checkout_destination(app, url_button.url)
+        assert destination.startswith("https://demo.payform.ru/?")
+        assert "subscription=4242" in destination
 
         await app.db.close()
 
