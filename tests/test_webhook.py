@@ -27,7 +27,8 @@ def test_webhook_endpoint() -> None:
         base = f"http://127.0.0.1:{port}"
 
         payload = {
-            "order_id": order_id,
+            "order_id": "prodamus-" + order_id,
+            "order_num": order_id,
             "payment_status": "success",
             "sum": "790",
             "customer_extra": "tg:777",
@@ -39,18 +40,17 @@ def test_webhook_endpoint() -> None:
             async with session.get(f"{base}/health") as response:
                 assert response.status == 200
 
-            # неверная подпись и незнакомый заказ -> отвечаем 200 (чтобы Prodamus
-            # не ретраил), но доступ не выдаём и предупреждаем админа
+            # Неверная подпись: 403, доступ не выдаём и предупреждаем админа.
             async with session.post(
                 base + app.settings.webhook_path,
                 data={**payload, "order_id": "tg999-unknown", "order_num": "tg999-unknown"},
                 headers={"Sign": "deadbeef"},
             ) as response:
-                assert response.status == 200
+                assert response.status == 403
 
             user = await app.db.get_user(777)
             assert user["status"] == "new"
-            assert any("подпись не сошлась" in text.lower() for text in app.bot.texts_to(111))
+            assert any("неверная подпись" in text.lower() for text in app.bot.texts_to(111))
             app.bot.clear()
 
             # верная подпись -> 200 success
@@ -62,7 +62,7 @@ def test_webhook_endpoint() -> None:
                 assert response.status == 200
                 assert (await response.text()).strip() == "success"
 
-            # обработка идёт в фоновой задаче — ждём результат
+            # Успешный ответ даётся после обработки уведомления.
             for _ in range(50):
                 user = await app.db.get_user(777)
                 if user["status"] == "active":

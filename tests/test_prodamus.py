@@ -64,10 +64,10 @@ def test_payment_url_recurrent() -> None:
     assert url.startswith("https://demo.payform.ru/?")
     assert "subscription=4242" in url
     assert "discount_value=158" in url
-    assert "customer_extra=tg%3A555" in url
+    assert "customer_extra=order%3Atg555-abc" in url
     assert "order_id=tg555-abc" in url
-    assert "order_num=tg555-abc" in url
-    assert "tg_user_id=555" in url
+    assert "order_num=" not in url
+    assert "tg_user_id=" not in url
     assert "signature=" in url
     assert "products%5B0%5D%5Bname%5D" in url
 
@@ -85,9 +85,9 @@ def test_foreign_payment_url_carries_multiple_user_correlation_fields() -> None:
 
     assert url is not None
     assert "order_id=tg777-foreign" in url
-    assert "order_num=tg777-foreign" in url
-    assert "customer_extra=tg%3A777" in url
-    assert "tg_user_id=777" in url
+    assert "order_num=" not in url
+    assert "customer_extra=order%3Atg777-foreign" in url
+    assert "tg_user_id=" not in url
 
 
 def test_parse_success_notification() -> None:
@@ -103,7 +103,7 @@ def test_parse_success_notification() -> None:
     )
     assert isinstance(note, Notification)
     assert note.kind == "paid"
-    assert note.tg_id == 777
+    assert note.tg_id is None
     assert note.amount == 790
     assert note.phone == "+79990001122"
 
@@ -118,8 +118,9 @@ def test_parse_telegram_id_from_order_num_when_prodamus_order_id_is_internal() -
             "sum": "790",
         }
     )
-    assert note.order_id == "51250997"
-    assert note.tg_id == 777
+    assert note.order_id == "tg777-abc"
+    assert note.prodamus_order_id == "51250997"
+    assert note.tg_id is None
 
 
 def test_parse_telegram_id_from_tg_user_id_with_internal_prodamus_order_id() -> None:
@@ -132,7 +133,8 @@ def test_parse_telegram_id_from_tg_user_id_with_internal_prodamus_order_id() -> 
             "sum": "790",
         }
     )
-    assert note.order_id == "51283964"
+    assert note.order_id is None
+    assert note.prodamus_order_id == "51283964"
     assert note.tg_id == 2138023308
 
 

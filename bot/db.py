@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS users (
     cancelled_at      TEXT,                          -- когда пользователь отменил подписку
     phone             TEXT,
     email             TEXT,
+    phone_verified    INTEGER NOT NULL DEFAULT 0,
+    email_verified    INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
 );
@@ -119,6 +121,8 @@ class Database:
         async with self.conn.execute("PRAGMA table_info(users)") as cur:
             columns = {row[1] for row in await cur.fetchall()}
         additions = {
+            "phone_verified": "ALTER TABLE users ADD COLUMN phone_verified INTEGER NOT NULL DEFAULT 0",
+            "email_verified": "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0",
             "auto_renew": "ALTER TABLE users ADD COLUMN auto_renew INTEGER NOT NULL DEFAULT 1",
             "cancelled_at": "ALTER TABLE users ADD COLUMN cancelled_at TEXT",
             "reminder_stage": (
@@ -230,32 +234,45 @@ class Database:
         return await self.get_user_by_username(query)
 
     async def get_user_by_contact(self, phone: str | None, email: str | None) -> dict | None:
-        if phone:
-            digits = _digits(phone)
-            if digits:
-                user = await self._fetchone(
-                    "SELECT * FROM users WHERE phone = ? OR phone = ?", (phone, "+" + digits)
-                )
-                if user:
-                    return user
-        if email:
-            user = await self._fetchone(
-                "SELECT * FROM users WHERE LOWER(email) = LOWER(?)", (email,)
-            )
-            if user:
-                return user
-        return None
+        """Ищет пользователя по сохранённому контакту.
+
+        Возвращает пользователя только если совпадение однозначно (ровно один
+        аккаунт). При нескольких совпадениях возвращает None — угадывать нельзя.
+        Телефоны сравниваем по цифрам, email — без учёта регистра.
+        """
+        phone_digits = _digits(phone) if phone else ""
+        email_norm = email.strip().lower() if email else ""
+        if not phone_digits and not email_norm:
+            return None
+        users = await self._fetchall(
+            "SELECT * FROM users WHERE phone IS NOT NULL OR email IS NOT NULL"
+        )
+        matches = []
+        for user in users:
+            stored_phone = _digits(user.get("phone") or "")
+            stored_email = (user.get("email") or "").strip().lower()
+            if phone_digits and stored_phone and stored_phone == phone_digits:
+                matches.append(user)
+            elif email_norm and stored_email and stored_email == email_norm:
+                matches.append(user)
+        if len(matches) != 1:
+            return None
+        user = matches[0]
+        verified = (phone_digits and _digits(user.get("phone") or "") == phone_digits and user.get("phone_verified")) or (email_norm and (user.get("email") or "").strip().lower() == email_norm and user.get("email_verified"))
+        return user if verified else None
 
     async def save_contacts(self, tg_id: int, phone: str | None, email: str | None) -> None:
         await self._write(
             """
             UPDATE users SET
+                phone_verified = CASE WHEN ? IS NOT NULL AND ? != COALESCE(phone, '') THEN 0 ELSE phone_verified END,
+                email_verified = CASE WHEN ? IS NOT NULL AND ? != COALESCE(email, '') THEN 0 ELSE email_verified END,
                 phone = COALESCE(?, phone),
                 email = COALESCE(?, email),
                 updated_at = ?
             WHERE tg_id = ?
             """,
-            (phone, email, now_iso(), tg_id),
+            (phone, phone, email, email, phone, email, now_iso(), tg_id),
         )
 
     async def activate(
@@ -421,30 +438,6 @@ class Database:
             (tg_id,),
         )
 
-    async def find_unique_pending_order_in_window(
-        self,
-        amount: int,
-        currency: str,
-        created_after: str,
-        created_before: str,
-    ) -> dict | None:
-        """Возвращает заказ только если в заданном окне ровно один кандидат.
-
-        Используется как ограниченная страховка для webhook без order_num/tg ID:
-        совпадение суммы и короткого времени не должно выбирать одного из нескольких.
-        """
-        rows = await self._fetchall(
-            """
-            SELECT * FROM orders
-            WHERE status = 'pending' AND amount = ? AND currency = ?
-              AND created_at >= ? AND created_at <= ?
-            ORDER BY created_at DESC
-            LIMIT 2
-            """,
-            (amount, currency.lower(), created_after, created_before),
-        )
-        return rows[0] if len(rows) == 1 else None
-
     async def get_order(self, order_id: str) -> dict | None:
         return await self._fetchone("SELECT * FROM orders WHERE order_id = ?", (order_id,))
 
@@ -461,7 +454,7 @@ class Database:
         self,
         order_id: str | None,
         tg_id: int | None,
-        amount: int | None,
+        amount: int | float | None,
         kind: str,
         is_renewal: bool = False,
         status_text: str | None = None,
@@ -484,6 +477,64 @@ class Database:
             ),
         )
 
+    async def apply_paid_payment(
+        self, *, prodamus_id: str | None, order_id: str | None, tg_id: int,
+        amount: int | float | None, status_text: str, raw: dict, days: int,
+        is_foreign: bool, currency: str | None,
+    ) -> tuple[bool, Any, bool]:
+        """Атомарно проверяет дубликат, продлевает доступ и записывает платёж."""
+        from datetime import timedelta
+        from .utils import from_iso
+
+        async with self._lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                async with self.conn.execute(
+                    "SELECT 1 FROM payments WHERE order_id = ? AND kind = 'paid' AND tg_id IS NOT NULL LIMIT 1",
+                    (prodamus_id,),
+                ) as cur:
+                    duplicate = bool(prodamus_id and await cur.fetchone())
+                if order_id:
+                    async with self.conn.execute("SELECT status, promo_code FROM orders WHERE order_id = ?", (order_id,)) as cur:
+                        order = await cur.fetchone()
+                    duplicate = duplicate or bool(order and order["status"] == "paid")
+                else:
+                    order = None
+                if duplicate:
+                    await self.conn.rollback()
+                    return False, None, False
+                async with self.conn.execute("SELECT paid_until FROM users WHERE tg_id = ?", (tg_id,)) as cur:
+                    user = await cur.fetchone()
+                if user is None:
+                    raise ValueError("Payment user does not exist")
+                now = utcnow()
+                current_until = from_iso(user["paid_until"])
+                if user["paid_until"] and current_until is None:
+                    raise ValueError("Invalid paid_until; manual investigation required")
+                renewal = bool(current_until and current_until > now)
+                until = (current_until if renewal else now) + timedelta(days=days)
+                await self.conn.execute(
+                    """UPDATE users SET status='active', paid_until=?, last_payment_at=?,
+                    reminder_sent_for=NULL, reminder_stage=0, access_source='prodamus',
+                    auto_renew=?, cancelled_at=NULL, last_currency=COALESCE(?, last_currency),
+                    updated_at=? WHERE tg_id=?""",
+                    (to_iso(until), to_iso(now), 0 if is_foreign else 1,
+                     currency if is_foreign else None, to_iso(now), tg_id),
+                )
+                if order_id:
+                    await self.conn.execute("UPDATE orders SET status='paid', paid_at=? WHERE order_id=?", (to_iso(now), order_id))
+                    if order and order["promo_code"]:
+                        await self.conn.execute("UPDATE promos SET used_count=used_count+1 WHERE code=?", (order["promo_code"],))
+                await self.conn.execute(
+                    "INSERT INTO payments (order_id, tg_id, amount, kind, is_renewal, status_text, raw, created_at) VALUES (?, ?, ?, 'paid', ?, ?, ?, ?)",
+                    (prodamus_id, tg_id, amount, int(renewal), status_text, json.dumps(raw, ensure_ascii=False), to_iso(now)),
+                )
+                await self.conn.commit()
+                return True, until, renewal
+            except BaseException:
+                await self.conn.rollback()
+                raise
+
     async def last_successful_payment(self, tg_id: int) -> dict | None:
         return await self._fetchone(
             """
@@ -493,28 +544,19 @@ class Database:
             (tg_id,),
         )
 
-    async def has_linked_successful_payment(self, order_id: str) -> bool:
-        """Защита от повторной выдачи по повторному webhook Prodamus."""
-        row = await self._fetchone(
-            """
-            SELECT 1 FROM payments
-            WHERE order_id = ? AND kind = 'paid' AND tg_id IS NOT NULL
-            LIMIT 1
-            """,
-            (order_id,),
-        )
-        return row is not None
+    async def has_linked_successful_payment(self, prodamus_order_id: str) -> bool:
+        """Защита от повторной выдачи по повторному webhook Prodamus.
 
-    async def unlinked_paid_payments_since(self, since: str) -> list[dict]:
-        """Не сопоставленные успешные уведомления для безопасного авто-восстановления."""
-        return await self._fetchall(
-            """
-            SELECT id, order_id, raw, created_at FROM payments
-            WHERE kind = 'paid' AND tg_id IS NULL AND raw IS NOT NULL AND created_at >= ?
-            ORDER BY id ASC
-            """,
-            (since,),
-        )
+        Проверяем по внутреннему ID Prodamus (webhook order_id) и только
+        привязанные к пользователю платежи: несопоставленный платёж не должен
+        блокировать повторную обработку, если позже пришлёт надёжный ID.
+        """
+        async with self._lock:
+            row = await self._fetchone(
+                "SELECT 1 FROM payments WHERE order_id = ? AND kind = 'paid' AND tg_id IS NOT NULL LIMIT 1",
+                (prodamus_order_id,),
+            )
+            return row is not None
 
     # -------------------------------------------------------------------- promos
 
@@ -576,15 +618,23 @@ class Database:
             "SELECT COUNT(*) AS c FROM users WHERE status = 'active' AND paid_until > ?",
             (now_iso(),),
         )
-        revenue = await self._fetchone(
-            "SELECT COALESCE(SUM(amount), 0) AS s, COUNT(*) AS c FROM payments WHERE kind = 'paid'"
-        )
+        # Одно уведомление может быть повторено и позднее привязано вручную.
+        # Учитываем один платёж Prodamus один раз, включая несопоставленные.
+        payment_totals = """
+            WITH ranked AS (
+                SELECT amount, created_at,
+                    ROW_NUMBER() OVER (PARTITION BY CASE WHEN order_id IS NULL
+                        THEN 'row:' || id ELSE 'payment:' || order_id END ORDER BY id DESC) AS rn,
+                    MIN(created_at) OVER (PARTITION BY CASE WHEN order_id IS NULL
+                        THEN 'row:' || id ELSE 'payment:' || order_id END) AS first_seen
+                FROM payments WHERE kind = 'paid'
+            )
+        """
+        revenue = await self._fetchone(payment_totals +
+            "SELECT COALESCE(SUM(amount), 0) AS s, COUNT(*) AS c FROM ranked WHERE rn=1")
         month_start = to_iso(utcnow().replace(day=1, hour=0, minute=0, second=0))
-        month = await self._fetchone(
-            "SELECT COALESCE(SUM(amount), 0) AS s, COUNT(*) AS c FROM payments "
-            "WHERE kind = 'paid' AND created_at >= ?",
-            (month_start,),
-        )
+        month = await self._fetchone(payment_totals +
+            "SELECT COALESCE(SUM(amount), 0) AS s, COUNT(*) AS c FROM ranked WHERE rn=1 AND first_seen >= ?", (month_start,))
         fresh = await self._fetchone(
             "SELECT COUNT(*) AS c FROM users WHERE created_at >= ?", (month_start,)
         )

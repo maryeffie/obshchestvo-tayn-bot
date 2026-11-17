@@ -137,8 +137,6 @@ def build_router(app: App) -> Router:
             "payment_status_description": "Тестовая оплата из бота",
             "sum": str(amount),
             "customer_extra": f"tg:{tg_id}",
-            "customer_phone": "+70000000000",
-            "customer_email": "test@example.com",
             "products": [
                 {
                     "name": settings.product_name,
@@ -162,7 +160,7 @@ def build_router(app: App) -> Router:
                         delivered = response.status == 200
                         detail = f"HTTP {response.status}"
             except Exception as exc:  # noqa: BLE001
-                detail = f"не смог достучаться до {settings.webhook_url}: {exc}"
+                detail = "не удалось отправить запрос на вебхук"
 
         if delivered:
             await message.answer(
@@ -278,9 +276,12 @@ def build_router(app: App) -> Router:
         tg_id = int(target) if target else message.from_user.id
         await db.upsert_user(tg_id)
         order_id = payments.new_order_id(tg_id)
+        await db.create_order(order_id=order_id, tg_id=tg_id, amount=settings.price,
+                              is_recurring=False)
         result = await payments.handle(
             {
-                "order_id": order_id,
+                "order_id": "test-" + order_id,
+                "order_num": order_id,
                 "payment_status": "success",
                 "payment_status_description": "Тестовая оплата из бота",
                 "sum": str(settings.price),

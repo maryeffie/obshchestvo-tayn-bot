@@ -128,7 +128,6 @@ async def main() -> None:
         await app.bot.set_my_commands(COMMANDS)
         await app.bot.delete_webhook(drop_pending_updates=False)
         await preflight(app)
-        await app.payments.reconcile_unlinked_paid_payments()
         log.info("Слушаю Telegram (long polling)…")
         await dispatcher.start_polling(
             app.bot,

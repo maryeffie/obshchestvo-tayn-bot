@@ -2,9 +2,9 @@
 """Отправляет подписанный вебхук Prodamus на наш сервер — проверка сценария без денег.
 
 Примеры:
-    python scripts/simulate_payment.py --tg-id 123456789
-    python scripts/simulate_payment.py --tg-id 123456789 --status fail
-    python scripts/simulate_payment.py --tg-id 123456789 --url https://bot.example.com/prodamus/webhook
+    python scripts/simulate_payment.py --tg-id 123456789 --order-id ЛОКАЛЬНЫЙ_ЗАКАЗ
+    python scripts/simulate_payment.py --tg-id 123456789 --order-id ЛОКАЛЬНЫЙ_ЗАКАЗ --status fail
+    python scripts/simulate_payment.py --tg-id 123456789 --order-id ЛОКАЛЬНЫЙ_ЗАКАЗ --url https://bot.example.com/prodamus/webhook
 """
 
 from __future__ import annotations
@@ -29,7 +29,8 @@ load_dotenv(ROOT / ".env")
 def build_payload(args: argparse.Namespace) -> dict:
     status = "success" if args.status == "success" else "fail"
     return {
-        "order_id": args.order_id or f"tg{args.tg_id}-sim{os.getpid()}",
+        "order_id": f"sim-{os.getpid()}-{os.urandom(8).hex()}",
+        "order_num": args.order_id,
         "payment_status": status,
         "payment_status_description": (
             "Оплачено" if status == "success" else "Недостаточно средств"
@@ -47,7 +48,7 @@ async def main() -> int:
     parser.add_argument("--tg-id", type=int, required=True, help="Telegram ID получателя")
     parser.add_argument("--amount", type=int, default=790, help="Сумма платежа")
     parser.add_argument("--status", choices=["success", "fail"], default="success")
-    parser.add_argument("--order-id", default=None, help="order_id существующего заказа")
+    parser.add_argument("--order-id", required=True, help="order_id существующего заказа")
     parser.add_argument(
         "--url",
         default=os.getenv("SIMULATE_URL")
@@ -66,8 +67,7 @@ async def main() -> int:
     payload = build_payload(args)
     signature = sign_payload(payload, args.secret)
 
-    print(f"POST {args.url}")
-    print(f"payload: {payload}")
+    print("Отправка тестового webhook")
 
     async with aiohttp.ClientSession() as session:
         async with session.post(args.url, data=payload, headers={"Sign": signature}) as response:

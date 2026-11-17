@@ -66,7 +66,7 @@ def main() -> int:
         print("❌ Нужны PRODAMUS_FORM_URL и PRODAMUS_SECRET в .env")
         return 1
     print(f"Форма:  {form}")
-    print(f"Ключ:   {secret[:6]}…{secret[-4:]}  ({len(secret)} символов)")
+    print("Ключ:   задан")
     print(f"Проверю подпись на тестовом заказе на {price} ₽ (оплата НЕ пройдёт).")
     print()
 

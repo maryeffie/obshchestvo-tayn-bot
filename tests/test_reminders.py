@@ -88,7 +88,8 @@ def test_reminder_stage_resets_after_payment() -> None:
         _url, _amount, order_id, _d = await app.payments.create_payment_link(703)
         await app.payments.handle(
             {
-                "order_id": order_id,
+                "order_id": "prodamus-" + order_id,
+                "order_num": order_id,
                 "payment_status": "success",
                 "sum": "790",
                 "customer_extra": "tg:703",
