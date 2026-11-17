@@ -8,7 +8,7 @@ from bot.handlers import admin as admin_handlers
 from bot.handlers import user as user_handlers
 from bot.utils import from_iso, is_active, utcnow
 
-from .helpers import make_app
+from .helpers import checkout_destination, make_app
 from .test_handlers import FakeCallback, FakeMessage, FakeState, _buttons, _handler
 
 ADMIN_ID = 111
@@ -107,7 +107,8 @@ def test_pay1_is_available_to_any_user_and_respects_limit() -> None:
         message = FakeMessage("/pay1", user_id=555)
         await handler(message, FakeState())
         assert "Тестовый платёж за 1 ₽" in message.last_text
-        url = message.answers[-1]["keyboard"].inline_keyboard[0][0].url
+        button_url = message.answers[-1]["keyboard"].inline_keyboard[0][0].url
+        url = await checkout_destination(app, button_url)
         assert "discount_value=789" in url
         assert "subscription=4242" in url
         assert any("Тестовая оплата за 1 ₽" in text for text in app.bot.texts_to(ADMIN_ID))

@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 from bot.handlers import user as user_handlers
 from bot.utils import from_iso, is_active, utcnow
 
-from .helpers import buttons_of, make_app
+from .helpers import buttons_of, checkout_destination, make_app
 from .test_handlers import FakeCallback, FakeMessage, FakeState, _handler
 
 
@@ -38,8 +38,10 @@ def test_paywall_offers_other_currency_with_universal_link() -> None:
         sent = call.message.answers[-1]
         assert "Тайны не знают границ" in sent["text"]
         url_button = sent["keyboard"].inline_keyboard[0][0]
-        assert url_button.url.startswith("https://payform.ru/g7d0lTx/?")
-        params = _params(url_button.url)
+        assert url_button.url.startswith("https://bot.example.com/checkout/")
+        destination = await checkout_destination(app, url_button.url)
+        assert destination.startswith("https://payform.ru/g7d0lTx/?")
+        params = _params(destination)
         assert params["customer_extra"] == "order:" + params["order_id"]
         assert params["order_id"].startswith("tg801-")
         assert "subscription" not in params              # разовый платёж, без автосписания

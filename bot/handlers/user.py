@@ -47,9 +47,10 @@ def build_router(app: App) -> Router:
     # ------------------------------------------------------------------ утилиты
 
     async def send_paywall(message: Message, tg_id: int, promo_code: str | None = None) -> None:
-        url, amount, _order_id, discount = await payments.create_payment_link(
+        url, amount, order_id, discount = await payments.create_payment_link(
             tg_id, promo_code=promo_code
         )
+        url = await payments.checkout_button_url(order_id, url)
         amount_label = fmt_price(amount, settings.currency)
         if discount and promo_code:
             text = texts.BEFORE_PAYMENT_WITH_PROMO.format(
@@ -116,9 +117,10 @@ def build_router(app: App) -> Router:
         text = texts.FOREIGN_CHOOSE.format(days=settings.subscription_days)
         try:
             # Режим формы задаётся настройками Prodamus.
-            url, _amount, _order_id, _currency = await payments.create_foreign_link(
+            url, _amount, order_id, _currency = await payments.create_foreign_link(
                 call.from_user.id
             )
+            url = await payments.checkout_button_url(order_id, url)
         except ValueError:
             await call.message.answer(texts.FOREIGN_UNAVAILABLE)
             return
@@ -176,7 +178,8 @@ def build_router(app: App) -> Router:
 
         tg_id = message.from_user.id
         await db.upsert_user(tg_id, message.from_user.username, message.from_user.first_name)
-        url, _amount, _order_id, discount = await payments.create_test_payment_link(tg_id)
+        url, _amount, order_id, discount = await payments.create_test_payment_link(tg_id)
+        url = await payments.checkout_button_url(order_id, url)
         await message.answer(
             texts.PAY1_LINK.format(
                 price=price_label,

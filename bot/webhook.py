@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from urllib.parse import parse_qs
 
 from aiohttp import web
 
+from . import texts
 from .app import App
 
 log = logging.getLogger(__name__)
@@ -15,9 +17,43 @@ log = logging.getLogger(__name__)
 
 def create_webhook_app(app: App) -> web.Application:
     settings = app.settings
+    notification_tasks: set[asyncio.Task] = set()
 
     async def health(request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "bot": "obshchestvo-tayn"})
+
+    async def checkout(request: web.Request) -> web.Response:
+        # Токен случаен и указывает только на уже сохранённый заказ: пользователь
+        # не может подставить произвольный адрес или Telegram ID для редиректа.
+        token = request.match_info["token"]
+        order = await app.db.get_order_by_checkout_token(token)
+        if not order or not order.get("checkout_url") or order["status"] not in {"pending", "failed"}:
+            return web.Response(status=404, text="Payment link unavailable")
+
+        try:
+            notify_once = await app.db.claim_checkout_notice(token)
+        except Exception:  # отсутствие сообщения не должно блокировать оплату
+            log.warning("Не удалось подготовить сообщение об ожидании оплаты")
+            notify_once = False
+        if notify_once:
+            async def notify() -> None:
+                try:
+                    await app.bot.send_message(chat_id=int(order["tg_id"]), text=texts.CHECKOUT_NOTICE)
+                except Exception:  # уведомление не должно прервать переход к оплате
+                    log.warning("Не удалось отправить сообщение об ожидании оплаты")
+
+            task = asyncio.create_task(notify())
+            notification_tasks.add(task)
+            task.add_done_callback(notification_tasks.discard)
+        return web.Response(
+            status=302,
+            headers={
+                "Location": order["checkout_url"],
+                "Cache-Control": "no-store",
+                "Referrer-Policy": "no-referrer",
+                "X-Robots-Tag": "noindex, nofollow",
+            },
+        )
 
     async def webhook(request: web.Request) -> web.Response:
         headers = dict(request.headers)
@@ -91,11 +127,20 @@ def create_webhook_app(app: App) -> web.Application:
     async def on_startup(application: web.Application) -> None:
         log.info("Вебхук Prodamus слушает %s", settings.webhook_path)
 
+    async def on_cleanup(application: web.Application) -> None:
+        tasks = tuple(notification_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     application = web.Application()
     application.router.add_get("/health", health)
+    application.router.add_get("/checkout/{token:[0-9a-f]{32}}", checkout, allow_head=False)
     application.router.add_get(settings.webhook_path, webhook_probe)
     application.router.add_post(settings.webhook_path, webhook)
     application.on_startup.append(on_startup)
+    application.on_cleanup.append(on_cleanup)
     return application
 
 

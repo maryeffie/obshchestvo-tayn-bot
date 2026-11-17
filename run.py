@@ -101,7 +101,9 @@ async def main() -> None:
     dispatcher.errors.register(build_error_handler(app))
 
     # --- HTTP-сервер для вебхуков Prodamus -------------------------------
-    runner = web.AppRunner(create_webhook_app(app))
+    # URL перехода на оплату содержит секретный идентификатор заказа;
+    # не записываем URL запросов в access log приложения.
+    runner = web.AppRunner(create_webhook_app(app), access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, host=settings.webhook_host, port=settings.webhook_port)
     await site.start()

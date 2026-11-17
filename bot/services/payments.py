@@ -6,6 +6,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from html import escape
+from urllib.parse import urlsplit
 
 from ..config import Settings
 from ..db import Database
@@ -72,6 +73,8 @@ class PaymentProcessor:
             promo_code=promo_code,
             is_recurring=self.settings.is_recurrent and not one_time,
             currency="foreign" if one_time else "rub",
+            checkout_url=url,
+            checkout_token=uuid.uuid4().hex,
         )
         return url, amount, order_id, discount
 
@@ -102,8 +105,36 @@ class PaymentProcessor:
             amount=self.settings.price,
             is_recurring=False,
             currency="foreign",
+            checkout_url=url,
+            checkout_token=uuid.uuid4().hex,
         )
         return url, self.settings.price, order_id, "rub"
+
+    async def checkout_button_url(self, order_id: str, direct_url: str) -> str:
+        """Одно нажатие: переход через сервер бота с уведомлением и редиректом.
+
+        Если публичный HTTPS-адрес не настроен, не ломаем оплату: возвращаем
+        прямую ссылку Prodamus, но при её нажатии уведомления не будет.
+        """
+        base = self.settings.public_base_url or ""
+        try:
+            parsed = urlsplit(base)
+            _port = parsed.port  # проверяем, что порт при наличии корректен
+            valid = (
+                parsed.scheme == "https" and parsed.hostname
+                and parsed.hostname.lower() not in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+                and not parsed.username and not parsed.password
+                and parsed.path in {"", "/"}
+                and not parsed.query and not parsed.fragment
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            return direct_url
+        order = await self.db.get_order(order_id)
+        if not order or not order.get("checkout_token"):
+            return direct_url
+        return f"{base.rstrip('/')}/checkout/{order['checkout_token']}"
 
     async def create_link_auto(self, tg_id: int) -> tuple[str, int, str, str]:
         """Ссылка для «Продлить»: та же дорожка, по которой человек платил в прошлый раз."""

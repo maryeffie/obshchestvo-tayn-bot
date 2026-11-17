@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS users (
     first_name        TEXT,
     status            TEXT NOT NULL DEFAULT 'new',   -- new | active | expired
     paid_until        TEXT,
+    exact_access_end  INTEGER NOT NULL DEFAULT 0,    -- ручная дата без отсрочки автосписания
     last_payment_at   TEXT,
     reminder_sent_for TEXT,                          -- дата paid_until, за которую уже напомнили
     reminder_stage    INTEGER NOT NULL DEFAULT 0,    -- 0 нет / 1 за N дней / 2 в день окончания / 3 после
@@ -50,6 +51,9 @@ CREATE TABLE IF NOT EXISTS orders (
     status       TEXT NOT NULL DEFAULT 'pending',    -- pending | paid | failed | cancelled
     is_recurring INTEGER NOT NULL DEFAULT 0,
     currency     TEXT NOT NULL DEFAULT 'rub',         -- валюта счёта (подписка — только rub)
+    checkout_url TEXT,                                -- точная ссылка на Prodamus
+    checkout_token TEXT,                              -- случайный идентификатор перехода
+    checkout_notified INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL,
     paid_at      TEXT
 );
@@ -67,6 +71,16 @@ CREATE TABLE IF NOT EXISTS payments (
     created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);
+
+CREATE TABLE IF NOT EXISTS admin_access_changes (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_tg_id    INTEGER NOT NULL,
+    tg_id          INTEGER NOT NULL,
+    old_paid_until TEXT,
+    new_paid_until TEXT NOT NULL,
+    old_status     TEXT,
+    created_at     TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS counters (
     name  TEXT PRIMARY KEY,
@@ -121,6 +135,7 @@ class Database:
         async with self.conn.execute("PRAGMA table_info(users)") as cur:
             columns = {row[1] for row in await cur.fetchall()}
         additions = {
+            "exact_access_end": "ALTER TABLE users ADD COLUMN exact_access_end INTEGER NOT NULL DEFAULT 0",
             "phone_verified": "ALTER TABLE users ADD COLUMN phone_verified INTEGER NOT NULL DEFAULT 0",
             "email_verified": "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0",
             "auto_renew": "ALTER TABLE users ADD COLUMN auto_renew INTEGER NOT NULL DEFAULT 1",
@@ -140,6 +155,17 @@ class Database:
             await self.conn.execute(
                 "ALTER TABLE orders ADD COLUMN currency TEXT NOT NULL DEFAULT 'rub'"
             )
+        if "checkout_url" not in order_columns:
+            await self.conn.execute("ALTER TABLE orders ADD COLUMN checkout_url TEXT")
+        if "checkout_token" not in order_columns:
+            await self.conn.execute("ALTER TABLE orders ADD COLUMN checkout_token TEXT")
+        if "checkout_notified" not in order_columns:
+            await self.conn.execute(
+                "ALTER TABLE orders ADD COLUMN checkout_notified INTEGER NOT NULL DEFAULT 0"
+            )
+        await self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_checkout_token ON orders(checkout_token)"
+        )
         await self.conn.commit()
 
     async def close(self) -> None:
@@ -289,6 +315,7 @@ class Database:
             UPDATE users SET
                 status = 'active',
                 paid_until = ?,
+                exact_access_end = 0,
                 last_payment_at = ?,
                 reminder_sent_for = NULL,
                 reminder_stage = 0,
@@ -303,6 +330,56 @@ class Database:
         user = await self.get_user(tg_id)
         assert user is not None
         return user
+
+    async def set_access_until_exact(
+        self, tg_id: int, paid_until, expected: dict | None, admin_tg_id: int
+    ) -> bool:
+        """Устанавливает дату без записи платежа и без изменения автосписания.
+
+        Сверка снимка внутри транзакции не позволяет перезаписать оплату или
+        отзыв доступа, произошедшие после того, как администратор увидел дату.
+        """
+        fields = ("status", "paid_until", "exact_access_end", "last_payment_at", "auto_renew", "cancelled_at", "updated_at")
+        async with self._lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                async with self.conn.execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,)) as cur:
+                    row = await cur.fetchone()
+                current = dict(row) if row else None
+                if (current is None) != (expected is None) or (
+                    current is not None and expected is not None
+                    and any(current[key] != expected.get(key) for key in fields)
+                ):
+                    await self.conn.rollback()
+                    return False
+                now = now_iso()
+                if current is None:
+                    await self.conn.execute(
+                        """INSERT INTO users (tg_id, status, paid_until, exact_access_end, access_source,
+                           auto_renew, reminder_stage, created_at, updated_at)
+                           VALUES (?, 'active', ?, 1, 'manual', 0, 99, ?, ?)""",
+                        (tg_id, to_iso(paid_until), now, now),
+                    )
+                else:
+                    await self.conn.execute(
+                        """UPDATE users SET status='active', paid_until=?, exact_access_end=1,
+                           reminder_sent_for=NULL,
+                           reminder_stage=CASE WHEN COALESCE(auto_renew, 1)=0 THEN 99 ELSE 0 END,
+                           updated_at=? WHERE tg_id=?""",
+                        (to_iso(paid_until), now, tg_id),
+                    )
+                await self.conn.execute(
+                    """INSERT INTO admin_access_changes
+                       (admin_tg_id, tg_id, old_paid_until, new_paid_until, old_status, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (admin_tg_id, tg_id, current["paid_until"] if current else None,
+                     to_iso(paid_until), current["status"] if current else None, now),
+                )
+                await self.conn.commit()
+                return True
+            except BaseException:
+                await self.conn.rollback()
+                raise
 
     async def set_status(self, tg_id: int, status: str) -> None:
         await self._write(
@@ -397,12 +474,14 @@ class Database:
         promo_code: str | None = None,
         is_recurring: bool = False,
         currency: str = "rub",
+        checkout_url: str | None = None,
+        checkout_token: str | None = None,
     ) -> None:
         await self._write(
             """
             INSERT INTO orders
-                (order_id, tg_id, amount, promo_code, is_recurring, currency, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (order_id, tg_id, amount, promo_code, is_recurring, currency, checkout_url, checkout_token, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 order_id,
@@ -411,6 +490,8 @@ class Database:
                 promo_code,
                 int(is_recurring),
                 currency.lower(),
+                checkout_url,
+                checkout_token,
                 now_iso(),
             ),
         )
@@ -440,6 +521,20 @@ class Database:
 
     async def get_order(self, order_id: str) -> dict | None:
         return await self._fetchone("SELECT * FROM orders WHERE order_id = ?", (order_id,))
+
+    async def get_order_by_checkout_token(self, token: str) -> dict | None:
+        return await self._fetchone("SELECT * FROM orders WHERE checkout_token = ?", (token,))
+
+    async def claim_checkout_notice(self, token: str) -> bool:
+        """Один запрос на сообщение на заказ даже при параллельных переходах."""
+        async with self._lock:
+            cursor = await self.conn.execute(
+                "UPDATE orders SET checkout_notified=1 WHERE checkout_token=? "
+                "AND checkout_notified=0 AND status IN ('pending', 'failed')",
+                (token,),
+            )
+            await self.conn.commit()
+            return cursor.rowcount == 1
 
     async def set_order_status(self, order_id: str, status: str) -> None:
         paid_at = now_iso() if status == "paid" else None
@@ -515,7 +610,7 @@ class Database:
                 until = (current_until if renewal else now) + timedelta(days=days)
                 await self.conn.execute(
                     """UPDATE users SET status='active', paid_until=?, last_payment_at=?,
-                    reminder_sent_for=NULL, reminder_stage=0, access_source='prodamus',
+                    exact_access_end=0, reminder_sent_for=NULL, reminder_stage=0, access_source='prodamus',
                     auto_renew=?, cancelled_at=NULL, last_currency=COALESCE(?, last_currency),
                     updated_at=? WHERE tg_id=?""",
                     (to_iso(until), to_iso(now), 0 if is_foreign else 1,

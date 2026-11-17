@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from bot.utils import from_iso, utcnow
 
-from .helpers import buttons_of, make_app
+from .helpers import buttons_of, checkout_destination, make_app
 
 
 def _revive(app, tg_id: int, paid_until):
@@ -31,10 +31,10 @@ def test_three_stage_reminder_chain() -> None:
         keyboard = app.bot.last_to(701)["keyboard"]
         buttons = buttons_of(keyboard)
         assert buttons == ["Продлить подписку", "Моя подписка"]
-        # первая кнопка — сразу на форму оплаты Prodamus, без лишнего шага
+        # URL-кнопка перенаправляет к Prodamus без второго нажатия
         pay_button = keyboard.inline_keyboard[0][0]
-        assert pay_button.url and pay_button.url.startswith("https://")
-        assert "order_id=tg701-" in pay_button.url
+        assert pay_button.url and pay_button.url.startswith("https://bot.example.com/checkout/")
+        assert "order_id=tg701-" in await checkout_destination(app, pay_button.url)
 
         # повторно то же сообщение не приходит
         assert (await app.tasks.tick())["reminded"] == 0

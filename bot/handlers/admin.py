@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
+from html import escape
 
 import aiohttp
 
@@ -21,6 +22,7 @@ from ..keyboards import (
     admin_kb,
     admins_kb,
     revoke_confirm_kb,
+    date_confirm_kb,
     user_card_kb,
     back_to_panel_kb,
     cancel_kb,
@@ -34,6 +36,7 @@ from ..utils import (
     fmt_datetime,
     fmt_price,
     human_username,
+    is_active,
     to_iso,
     utcnow,
 )
@@ -47,6 +50,9 @@ STATUS_LABELS = {"new": "новичок", "active": "активен", "expired":
 class AdminStates(StatesGroup):
     grant_user = State()
     grant_days = State()
+    date_user = State()
+    date_value = State()
+    date_confirm = State()
     revoke_user = State()
     find_user = State()
     cancel_user = State()
@@ -490,6 +496,130 @@ def build_router(app: App) -> Router:
         )
         if call.message is not None:
             await call.message.answer(text, reply_markup=back_to_panel_kb())
+
+    # ------------------------------------------- точная дата доступа
+
+    async def ask_access_date(message: Message, state: FSMContext, tg_id: int) -> None:
+        user = await db.get_user(tg_id)
+        await state.update_data(date_tg_id=tg_id)
+        await state.set_state(AdminStates.date_value)
+        await message.answer(
+            texts.ADMIN_DATE_ASK.format(
+                user=escape(human_username(user or {"tg_id": tg_id})),
+                tg_id=tg_id,
+                timezone=escape(str(settings.timezone)),
+            ),
+            reply_markup=cancel_kb(),
+        )
+
+    @router.callback_query(F.data == "adm:date", is_admin)
+    async def cb_date_start(call: CallbackQuery, state: FSMContext) -> None:
+        await state.clear()
+        await state.set_state(AdminStates.date_user)
+        await call.answer()
+        if call.message is not None:
+            await call.message.answer(texts.ADMIN_DATE_ASK_USER, reply_markup=cancel_kb())
+
+    @router.callback_query(F.data.startswith("adm:date:"), is_admin)
+    async def cb_date_from_card(call: CallbackQuery, state: FSMContext) -> None:
+        raw = (call.data or "").rsplit(":", 1)[-1]
+        if not raw.isdigit() or len(raw) > 19 or not 0 < int(raw) < 2**63:
+            await call.answer("Не удалось определить пользователя", show_alert=True)
+            return
+        await state.clear()
+        await call.answer()
+        if call.message is not None:
+            await ask_access_date(call.message, state, int(raw))
+
+    @router.message(AdminStates.date_user, is_admin, F.text)
+    async def date_user(message: Message, state: FSMContext) -> None:
+        raw = (message.text or "").strip()
+        if raw.isdigit() and (len(raw) > 19 or not 0 < int(raw) < 2**63):
+            await message.answer(texts.ADMIN_USER_NOT_FOUND, reply_markup=cancel_kb())
+            return
+        tg_id, _user = await resolve_target(message)
+        if tg_id is None or not 0 < tg_id < 2**63:
+            await message.answer(texts.ADMIN_USER_NOT_FOUND, reply_markup=cancel_kb())
+            return
+        await ask_access_date(message, state, tg_id)
+
+    @router.message(AdminStates.date_value, is_admin, F.text)
+    async def date_value(message: Message, state: FSMContext) -> None:
+        value = (message.text or "").strip()
+        try:
+            if not re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", value):
+                raise ValueError("date format")
+            # Включительно весь указанный день в настройках часового пояса бота.
+            until = datetime.strptime(value, "%d.%m.%Y").replace(
+                hour=23, minute=59, second=59, tzinfo=settings.timezone
+            )
+            if until <= utcnow():
+                raise ValueError("past date")
+        except ValueError:
+            await message.answer(texts.ADMIN_DATE_INVALID, reply_markup=cancel_kb())
+            return
+        data = await state.get_data()
+        tg_id = data.get("date_tg_id")
+        if not isinstance(tg_id, int) or tg_id <= 0:
+            await state.clear()
+            await message.answer(texts.ADMIN_CANCELLED, reply_markup=back_to_panel_kb())
+            return
+        user = await db.get_user(tg_id)
+        keys = ("status", "paid_until", "exact_access_end", "last_payment_at", "auto_renew", "cancelled_at", "updated_at")
+        snapshot = {key: user.get(key) for key in keys} if user else None
+        old_until = from_iso(user.get("paid_until")) if user else None
+        warning = "⚠️ <b>Новый срок короче текущего.</b>\n\n" if old_until and until < old_until else ""
+        await state.update_data(date_until=to_iso(until), date_expected=snapshot)
+        await state.set_state(AdminStates.date_confirm)
+        await message.answer(
+            texts.ADMIN_DATE_CONFIRM.format(
+                user=escape(human_username(user or {"tg_id": tg_id})), tg_id=tg_id,
+                old=fmt_datetime(old_until, settings.timezone),
+                status=STATUS_LABELS.get(user.get("status"), "неизвестен") if user else "нет в базе",
+                new=fmt_datetime(until, settings.timezone), timezone=escape(str(settings.timezone)),
+                warning=warning,
+            ),
+            reply_markup=date_confirm_kb(),
+        )
+
+    @router.callback_query(AdminStates.date_confirm, F.data == "adm:date_confirm", is_admin)
+    async def cb_date_confirm(call: CallbackQuery, state: FSMContext) -> None:
+        data = await state.get_data()
+        await state.clear()
+        await call.answer()
+        tg_id = data.get("date_tg_id")
+        until = from_iso(data.get("date_until"))
+        if (
+            call.from_user is None or not isinstance(tg_id, int) or tg_id <= 0
+            or until is None or until <= utcnow()
+        ):
+            if call.message is not None:
+                await call.message.answer(texts.ADMIN_DATE_INVALID, reply_markup=back_to_panel_kb())
+            return
+        expected = data.get("date_expected")
+        if not await db.set_access_until_exact(tg_id, until, expected, call.from_user.id):
+            if call.message is not None:
+                await call.message.answer(texts.ADMIN_DATE_CONFLICT, reply_markup=back_to_panel_kb())
+            return
+        user = await db.get_user(tg_id)
+        name = escape(human_username(user or {"tg_id": tg_id}))
+        result = texts.ADMIN_DATE_CHANGED.format(
+            user=name, date=fmt_date(until, settings.timezone), timezone=escape(str(settings.timezone))
+        )
+        # При исправлении действующего срока не выдаём повторно приглашения и не
+        # сообщаем об оплате. Для нового или неактивного участника отправляем ссылки.
+        if not is_active(expected):
+            ok, _error = await access.send_access(
+                tg_id, paid_until=until,
+                text=texts.ACCESS_UNTIL_MANUAL.format(date=fmt_date(until, settings.timezone)),
+            )
+            result += texts.ADMIN_DATE_CHANGED_INVITES if ok else texts.ADMIN_DATE_CHANGED_FAILED
+        if call.message is not None:
+            await call.message.answer(result, reply_markup=back_to_panel_kb())
+
+    @router.callback_query(F.data == "adm:date_confirm", is_admin)
+    async def cb_date_expired(call: CallbackQuery) -> None:
+        await call.answer("Подтверждение устарело. Начните изменение даты заново.", show_alert=True)
 
     # ---------------------------------------------------------- отзыв доступа
 

@@ -3,7 +3,7 @@ import asyncio
 from urllib.parse import parse_qs, urlsplit
 
 from bot.handlers import user as user_handlers
-from .helpers import make_app
+from .helpers import checkout_destination, make_app
 from .test_handlers import FakeMessage, FakeState, _handler
 
 
@@ -19,7 +19,8 @@ def test_pay1_and_normal_use_same_builder_and_share_delivery_path():
             msg = FakeMessage("/pay1", user_id=user_id)
             router = user_handlers.build_router(app)
             await _handler(router, "message", "cmd_pay1")(msg, FakeState())
-            test_url = msg.answers[-1]["keyboard"].inline_keyboard[0][0].url
+            button_url = msg.answers[-1]["keyboard"].inline_keyboard[0][0].url
+            test_url = await checkout_destination(app, button_url)
             normal_url, _, normal_order, _ = await app.payments.create_payment_link(user_id)
             t, n = params(test_url), params(normal_url)
             test_order = t["order_id"]
