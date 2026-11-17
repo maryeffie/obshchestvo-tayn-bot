@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timedelta
+from html import escape
 
 from ..config import Settings
 from ..db import Database
 from ..prodamus import Notification, ProdamusClient
-from ..utils import fmt_price, from_iso, human_username, utcnow
+from ..utils import fmt_price, from_iso, human_username, to_iso, utcnow
 from .access import AccessService
 
 log = logging.getLogger(__name__)
@@ -102,16 +104,15 @@ class PaymentProcessor:
     async def handle(self, data: dict) -> str:
         """Обрабатывает уведомление Prodamus. Возвращает метку результата для логов."""
         note = self.prodamus.parse(data)
-        order = await self.db.get_order(note.order_id) if note.order_id else None
-        if order is None:
-            # в уведомлении Prodamus order_id — их внутренний номер, наш заказ
-            # приходит в поле order_num
-            for key in ("order_num", "order_id"):
-                candidate = str(data.get(key) or "")
-                if candidate and candidate != note.order_id:
-                    order = await self.db.get_order(candidate)
-                    if order is not None:
-                        break
+        if (
+            note.kind == "paid"
+            and note.order_id
+            and await self.db.has_linked_successful_payment(note.order_id)
+        ):
+            log.info("Повторное подтверждённое уведомление Prodamus %s — пропускаем", note.order_id)
+            return "duplicate"
+
+        order = await self._find_order(data, note)
         order_currency = str((order or {}).get("currency") or "rub").lower()
         paid_currency = (note.currency or "").lower()
         # платёж из-за рубежа: валютный счёт или бессрочная ссылка с конвертацией
@@ -121,28 +122,35 @@ class PaymentProcessor:
         )
         # в статистике всё считаем в рублях: один оплаченный месяц = цена подписки
         stats_amount = self.settings.price if is_foreign else note.amount
+        # Prodamus может прислать внутренний числовой order_id, а наш заказ
+        # найтись только по order_num. Используем найденный заказ при привязке
+        # платежа к Telegram-пользователю.
+        tg_id = await self._resolve_user(note, order)
         await self.db.add_payment(
             order_id=note.order_id,
-            tg_id=note.tg_id,
+            tg_id=tg_id,
             amount=stats_amount,
             kind=note.kind,
             is_renewal=note.is_renewal,
             status_text=note.status_text,
             raw=data,
         )
-
-        tg_id = await self._resolve_user(note)
         if tg_id is None:
             log.warning(
-                "Не удалось определить пользователя из уведомления (order_id=%s, extra=%s)",
+                "Не удалось определить пользователя из уведомления "
+                "(order_id=%s, order_num=%s, extra=%s)",
                 note.order_id,
+                data.get("order_num"),
                 data.get("customer_extra"),
             )
             await self.access.notify_admins(
                 "⚠️ <b>Платёж пришёл, но пользователя не удалось определить.</b>\n\n"
-                f"order_id: <code>{note.order_id}</code>\n"
+                f"order_id: <code>{escape(str(note.order_id or '—'))}</code>\n"
+                f"order_num: <code>{escape(str(data.get('order_num') or '—'))}</code>\n"
+                f"tg_user_id: <code>{escape(str(data.get('tg_user_id') or '—'))}</code>\n"
+                f"customer_extra: <code>{escape(str(data.get('customer_extra') or '—'))}</code>\n"
                 f"Сумма: {note.amount}\n"
-                f"Телефон: {note.phone}\n\n"
+                f"Телефон: {escape(str(note.phone or '—'))}\n\n"
                 "Выдайте доступ вручную: /admin → «Выдать доступ»."
             )
             return "unknown-user"
@@ -152,7 +160,8 @@ class PaymentProcessor:
             user = await self.db.upsert_user(tg_id)
 
         if note.kind == "failed":
-            await self.db.set_order_status(note.order_id, "failed") if order else None
+            if order is not None:
+                await self.db.set_order_status(order["order_id"], "failed")
             await self.access.send_failure(tg_id)
             log.info("Неуспешная оплата у %s: %s", tg_id, note.status_text)
             return "failed"
@@ -225,10 +234,95 @@ class PaymentProcessor:
         )
         return "renewed" if is_renewal else "paid"
 
+    async def reconcile_unlinked_paid_payments(self, lookback_days: int = 7) -> int:
+        """Автоматически восстанавливает недавние платежи, ранее записанные без tg_id.
+
+        Исходный webhook уже был принят обработчиком и сохранён в payments.raw.
+        Перед повторной обработкой обязательно находим пользователя по заказу/контакту;
+        неизвестные и неоднозначные платежи оставляем без изменений.
+        """
+        since = to_iso(utcnow() - timedelta(days=lookback_days))
+        rows = await self.db.unlinked_paid_payments_since(since)
+        recovered = 0
+
+        for row in rows:
+            try:
+                data = json.loads(row["raw"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+
+            note = self.prodamus.parse(data)
+            if note.kind != "paid":
+                continue
+            if note.order_id and await self.db.has_linked_successful_payment(note.order_id):
+                continue
+
+            order = await self._find_order(data, note)
+            if await self._resolve_user(note, order) is None:
+                continue
+
+            result = await self.handle(data)
+            if result in {"paid", "renewed"}:
+                recovered += 1
+
+        if recovered:
+            log.info("Автоматически восстановлено несопоставленных платежей: %s", recovered)
+        return recovered
+
     # ------------------------------------------------------------------ помощники
 
-    async def _resolve_user(self, note: Notification) -> int | None:
-        """Ищем tg_id: заказ -> customer_extra -> телефон/почта."""
+    async def _find_order(self, data: dict, note: Notification) -> dict | None:
+        order = await self.db.get_order(note.order_id) if note.order_id else None
+        if order is None:
+            # в уведомлении Prodamus order_id — их внутренний номер, наш заказ
+            # приходит в поле order_num
+            for key in ("order_num", "order_id"):
+                candidate = str(data.get(key) or "")
+                if candidate and candidate != note.order_id:
+                    order = await self.db.get_order(candidate)
+                    if order is not None:
+                        break
+        if order is None and note.kind == "paid":
+            order = await self._find_unique_recent_order(data, note)
+        return order
+
+    async def _find_unique_recent_order(
+        self, data: dict, note: Notification
+    ) -> dict | None:
+        """Ищем ровно один свежий зарубежный заказ, если Prodamus потерял ID.
+
+        Ограничиваем окно 15 минутами и требуем точного совпадения суммы и валютного
+        типа. При нуле или нескольких кандидатах не угадываем пользователя.
+        """
+        if note.amount is None or (note.currency or "").lower() in {"", "rub"}:
+            return None
+        paid_at = from_iso(str(data.get("date") or ""))
+        if paid_at is None:
+            return None
+
+        order = await self.db.find_unique_pending_order_in_window(
+            amount=note.amount,
+            currency="foreign",
+            created_after=to_iso(paid_at - timedelta(minutes=15)),
+            created_before=to_iso(paid_at + timedelta(minutes=1)),
+        )
+        if order is not None:
+            log.warning(
+                "Связали webhook %s с единственным свежим зарубежным заказом %s "
+                "по сумме и времени; переданные Prodamus ID отсутствовали",
+                note.order_id,
+                order["order_id"],
+            )
+        return order
+
+    async def _resolve_user(
+        self, note: Notification, order: dict | None = None
+    ) -> int | None:
+        """Ищем tg_id: найденный заказ -> order_id -> customer_extra -> телефон/почта."""
+        if order is not None:
+            return int(order["tg_id"])
         if note.order_id:
             order = await self.db.get_order(note.order_id)
             if order:

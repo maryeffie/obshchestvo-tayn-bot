@@ -66,6 +66,8 @@ def test_payment_url_recurrent() -> None:
     assert "discount_value=158" in url
     assert "customer_extra=tg%3A555" in url
     assert "order_id=tg555-abc" in url
+    assert "order_num=tg555-abc" in url
+    assert "tg_user_id=555" in url
     assert "signature=" in url
     assert "products%5B0%5D%5Bname%5D" in url
 
@@ -75,6 +77,17 @@ def test_payment_url_one_time_discount() -> None:
     url = client.payment_url(tg_id=1, order_id="tg1-abc", base_amount=790, discount=79)
     assert "subscription=" not in url
     assert "products%5B0%5D%5Bprice%5D=711" in url
+
+
+def test_foreign_payment_url_carries_multiple_user_correlation_fields() -> None:
+    client = ProdamusClient(make_settings())
+    url = client.foreign_payment_url(777, "tg777-foreign")
+
+    assert url is not None
+    assert "order_id=tg777-foreign" in url
+    assert "order_num=tg777-foreign" in url
+    assert "customer_extra=tg%3A777" in url
+    assert "tg_user_id=777" in url
 
 
 def test_parse_success_notification() -> None:
@@ -93,6 +106,34 @@ def test_parse_success_notification() -> None:
     assert note.tg_id == 777
     assert note.amount == 790
     assert note.phone == "+79990001122"
+
+
+def test_parse_telegram_id_from_order_num_when_prodamus_order_id_is_internal() -> None:
+    client = ProdamusClient(make_settings())
+    note = client.parse(
+        {
+            "order_id": "51250997",
+            "order_num": "tg777-abc",
+            "payment_status": "success",
+            "sum": "790",
+        }
+    )
+    assert note.order_id == "51250997"
+    assert note.tg_id == 777
+
+
+def test_parse_telegram_id_from_tg_user_id_with_internal_prodamus_order_id() -> None:
+    client = ProdamusClient(make_settings())
+    note = client.parse(
+        {
+            "order_id": "51283964",
+            "tg_user_id": "2138023308",
+            "payment_status": "success",
+            "sum": "790",
+        }
+    )
+    assert note.order_id == "51283964"
+    assert note.tg_id == 2138023308
 
 
 def test_parse_failed_notification() -> None:

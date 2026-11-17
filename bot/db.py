@@ -421,6 +421,30 @@ class Database:
             (tg_id,),
         )
 
+    async def find_unique_pending_order_in_window(
+        self,
+        amount: int,
+        currency: str,
+        created_after: str,
+        created_before: str,
+    ) -> dict | None:
+        """Возвращает заказ только если в заданном окне ровно один кандидат.
+
+        Используется как ограниченная страховка для webhook без order_num/tg ID:
+        совпадение суммы и короткого времени не должно выбирать одного из нескольких.
+        """
+        rows = await self._fetchall(
+            """
+            SELECT * FROM orders
+            WHERE status = 'pending' AND amount = ? AND currency = ?
+              AND created_at >= ? AND created_at <= ?
+            ORDER BY created_at DESC
+            LIMIT 2
+            """,
+            (amount, currency.lower(), created_after, created_before),
+        )
+        return rows[0] if len(rows) == 1 else None
+
     async def get_order(self, order_id: str) -> dict | None:
         return await self._fetchone("SELECT * FROM orders WHERE order_id = ?", (order_id,))
 
@@ -467,6 +491,29 @@ class Database:
             ORDER BY id DESC LIMIT 1
             """,
             (tg_id,),
+        )
+
+    async def has_linked_successful_payment(self, order_id: str) -> bool:
+        """Защита от повторной выдачи по повторному webhook Prodamus."""
+        row = await self._fetchone(
+            """
+            SELECT 1 FROM payments
+            WHERE order_id = ? AND kind = 'paid' AND tg_id IS NOT NULL
+            LIMIT 1
+            """,
+            (order_id,),
+        )
+        return row is not None
+
+    async def unlinked_paid_payments_since(self, since: str) -> list[dict]:
+        """Не сопоставленные успешные уведомления для безопасного авто-восстановления."""
+        return await self._fetchall(
+            """
+            SELECT id, order_id, raw, created_at FROM payments
+            WHERE kind = 'paid' AND tg_id IS NULL AND raw IS NOT NULL AND created_at >= ?
+            ORDER BY id ASC
+            """,
+            (since,),
         )
 
     # -------------------------------------------------------------------- promos
