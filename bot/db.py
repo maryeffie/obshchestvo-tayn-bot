@@ -434,7 +434,8 @@ class Database:
             SELECT * FROM users
             WHERE status = 'active'
               AND paid_until IS NOT NULL
-              AND COALESCE(auto_renew, 1) = 1
+              AND (COALESCE(auto_renew, 1) = 1 OR
+                   (cancelled_at IS NULL AND COALESCE(last_currency, 'rub') != 'rub'))
               AND paid_until <= ?
             """,
             (horizon_iso,),

@@ -136,18 +136,6 @@ class PaymentProcessor:
             return direct_url
         return f"{base.rstrip('/')}/checkout/{order['checkout_token']}"
 
-    async def create_link_auto(self, tg_id: int) -> tuple[str, int, str, str]:
-        """Ссылка для «Продлить»: та же дорожка, по которой человек платил в прошлый раз."""
-        user = await self.db.get_user(tg_id) or {}
-        currency = str(user.get("last_currency") or "rub").lower()
-        if currency != "rub":
-            try:
-                return await self.create_foreign_link(tg_id)
-            except ValueError:
-                log.warning("Не удалось собрать зарубежную ссылку, отдаю рублёвую")
-        url, amount, order_id, _discount = await self.create_payment_link(tg_id)
-        return url, amount, order_id, "rub"
-
     # ------------------------------------------------------------ обработка вебхука
 
     async def handle(self, data: dict) -> str:

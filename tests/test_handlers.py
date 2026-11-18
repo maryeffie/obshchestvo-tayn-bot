@@ -133,6 +133,7 @@ def test_promo_entry_recalculates_price() -> None:
         assert "скидка 20%" in paywall["text"]
         assert "Оплатить в рублях 632 ₽" in _buttons(paywall["keyboard"])
         assert "Убрать промокод" in _buttons(paywall["keyboard"])
+        assert "Оплатить в другой валюте" in _buttons(paywall["keyboard"])
 
         await app.db.close()
 

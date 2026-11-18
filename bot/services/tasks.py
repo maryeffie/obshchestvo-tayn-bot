@@ -84,13 +84,17 @@ class ScheduledTasks:
                 await self.db.set_reminder_stage(user["tg_id"], stage, user["paid_until"])
                 continue
 
-            pay_url, price_label = await self._renewal_url(user["tg_id"])
+            manual = (user.get("access_source") == "manual" or
+                      (not user.get("auto_renew", 1) and
+                       str(user.get("last_currency") or "rub").lower() != "rub"))
+            pay_url, price_label = (None, None) if manual else await self._renewal_url(user["tg_id"])
             ok = await self.access.send_reminder(
                 user["tg_id"],
                 paid_until,
                 REMINDER_STAGES[stage - 1],
                 pay_url=pay_url,
                 price_label=price_label,
+                manual=manual,
             )
             # фиксируем факт попытки в любом случае, чтобы не спамить каждые 10 минут
             await self.db.set_reminder_stage(user["tg_id"], stage, user["paid_until"])
@@ -103,9 +107,9 @@ class ScheduledTasks:
         if self.payments is None:
             return None, None
         try:
-            url, amount, order_id, currency = await self.payments.create_link_auto(tg_id)
+            url, amount, order_id, _discount = await self.payments.create_payment_link(tg_id)
             url = await self.payments.checkout_button_url(order_id, url)
-            return url, fmt_price(amount, currency)
+            return url, fmt_price(amount, self.settings.currency)
         except Exception:  # noqa: BLE001 — напоминание важнее кнопки
             log.exception("Не удалось создать ссылку на оплату для напоминания")
             return None, None

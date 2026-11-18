@@ -65,7 +65,7 @@ def build_router(app: App) -> Router:
             keyboard = paywall_kb(
                 url,
                 amount_label,
-                with_foreign=bool(settings.prodamus_foreign_url),
+                with_foreign=True,
             )
         await message.answer(text, reply_markup=keyboard, disable_web_page_preview=True)
 
@@ -82,7 +82,12 @@ def build_router(app: App) -> Router:
         if is_active(user):
             until = from_iso(user["paid_until"])
             until_label = fmt_date(until, settings.timezone)
-            if int(user.get("auto_renew", 1)) == 0:
+            if user.get("access_source") == "manual" and not user.get("cancelled_at"):
+                renewal_line = texts.RENEWAL_LINE_MANUAL_GRANT.format(date=until_label)
+            elif (not user.get("cancelled_at") and int(user.get("auto_renew", 1)) == 0
+                  and str(user.get("last_currency") or "rub").lower() != "rub"):
+                renewal_line = texts.RENEWAL_LINE_MANUAL.format(date=until_label)
+            elif int(user.get("auto_renew", 1)) == 0:
                 template = (
                     texts.RENEWAL_LINE_OFF if settings.is_recurrent
                     else texts.RENEWAL_LINE_OFF_MANUAL
@@ -114,18 +119,11 @@ def build_router(app: App) -> Router:
         await call.answer()
         if call.message is None or call.from_user is None:
             return
-        text = texts.FOREIGN_CHOOSE.format(days=settings.subscription_days)
-        try:
-            # Режим формы задаётся настройками Prodamus.
-            url, _amount, order_id, _currency = await payments.create_foreign_link(
-                call.from_user.id
-            )
-            url = await payments.checkout_button_url(order_id, url)
-        except ValueError:
-            await call.message.answer(texts.FOREIGN_UNAVAILABLE)
-            return
+        await db.upsert_user(
+            call.from_user.id, call.from_user.username, call.from_user.first_name
+        )
         await call.message.answer(
-            text, reply_markup=foreign_pay_kb(url), disable_web_page_preview=True
+            texts.FOREIGN_CHOOSE, reply_markup=foreign_pay_kb(), disable_web_page_preview=True
         )
 
     async def ensure_user(message: Message) -> dict:
@@ -157,6 +155,16 @@ def build_router(app: App) -> Router:
         assert message.from_user is not None
         await ensure_user(message)
         await send_status(message, message.from_user.id)
+
+    @router.message(Command("myid"))
+    async def cmd_myid(message: Message) -> None:
+        if message.from_user is None:
+            return
+        await ensure_user(message)
+        await message.answer(
+            f"Ваш Telegram ID: <code>{message.from_user.id}</code>\n"
+            "Передайте его администратору, чтобы он сверил Ваш аккаунт при выдаче доступа."
+        )
 
     @router.message(Command("pay1"))
     async def cmd_pay1(message: Message, state: FSMContext) -> None:

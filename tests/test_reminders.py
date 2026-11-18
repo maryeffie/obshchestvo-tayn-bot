@@ -30,7 +30,7 @@ def test_three_stage_reminder_chain() -> None:
         assert "пришло время продлить" in text
         keyboard = app.bot.last_to(701)["keyboard"]
         buttons = buttons_of(keyboard)
-        assert buttons == ["Продлить подписку", "Моя подписка"]
+        assert buttons == ["Продлить подписку", "Продлить в другой валюте", "Моя подписка"]
         # URL-кнопка перенаправляет к Prodamus без второго нажатия
         pay_button = keyboard.inline_keyboard[0][0]
         assert pay_button.url and pay_button.url.startswith("https://bot.example.com/checkout/")
@@ -119,4 +119,34 @@ def test_cancelled_user_gets_no_reminders_at_all() -> None:
         assert (await app.tasks.tick())["reminded"] == 0
         await app.db.close()
 
+    asyncio.run(scenario())
+
+
+def test_foreign_reminder_and_manual_grant_create_no_foreign_orders() -> None:
+    async def scenario() -> None:
+        app = await make_app(prodamus_foreign_url=None, prodamus_foreign_dynamic=True)
+        now = utcnow()
+        await _revive(app, 705, now + timedelta(days=2))
+        await app.db.set_last_currency(705, "eur")
+        await app.db.set_auto_renew(705, False, cancelled=False)
+        # Сброс стадии: реальные старые иностранные платежи ставят её в 0.
+        await app.db.set_reminder_stage(705, 0, (await app.db.get_user(705))["paid_until"])
+        assert await app.tasks.send_renewal_reminders() == 1
+        reminder = app.bot.last_to(705)
+        assert "персональную ссылку" in reminder["text"]
+        assert reminder["keyboard"].inline_keyboard[0][0].callback_data == "join"
+        assert await app.db._fetchall("SELECT * FROM orders") == []
+
+        # Явно отменившим подписку напоминания не отправляются.
+        await _revive(app, 706, now + timedelta(days=2))
+        await app.db.set_last_currency(706, "eur")
+        await app.db.set_auto_renew(706, False, cancelled=True)
+        assert await app.tasks.send_renewal_reminders() == 0
+
+        await app.db.upsert_user(707)
+        await app.db.activate(707, now + timedelta(days=2), source="manual")
+        assert await app.tasks.send_renewal_reminders() == 1
+        assert "персональную ссылку" in app.bot.last_to(707)["text"]
+        assert await app.db._fetchall("SELECT * FROM orders") == []
+        await app.db.close()
     asyncio.run(scenario())
