@@ -47,9 +47,9 @@ def pay_url_kb(pay_url: str, label: str = "Перейти к оплате") -> I
     return _kb([InlineKeyboardButton(text=f"💳 {label}", url=pay_url)])
 
 
-def foreign_pay_kb(pay_url: str) -> InlineKeyboardMarkup:
+def foreign_pay_kb() -> InlineKeyboardMarkup:
     return _kb(
-        [InlineKeyboardButton(text="💳 Перейти к оплате", url=pay_url)],
+        [InlineKeyboardButton(text="Получить ссылку на оплату", url="https://t.me/m/gavHrzZfNjFk")],
         [
             InlineKeyboardButton(text="↩️ Назад", callback_data="join"),
             InlineKeyboardButton(text="📅 Моя подписка", callback_data="status"),
@@ -68,6 +68,7 @@ def quick_grant_kb(tg_id: int) -> InlineKeyboardMarkup:
 def paywall_kb_with_promo_reset(pay_url: str, price_label: str) -> InlineKeyboardMarkup:
     return _kb(
         [InlineKeyboardButton(text=f"💳 Оплатить в рублях {price_label}", url=pay_url)],
+        [InlineKeyboardButton(text="🌍 Оплатить в другой валюте", callback_data="cur:menu")],
         [InlineKeyboardButton(text="↩️ Убрать промокод", callback_data="promo:reset")],
     )
 
@@ -114,6 +115,7 @@ def renew_url_kb(pay_url: str, price_label: str) -> InlineKeyboardMarkup:
     """Продление в один клик: кнопка сразу ведёт на страницу оплаты."""
     return _kb(
         [InlineKeyboardButton(text="💳 Продлить подписку", url=pay_url)],
+        [InlineKeyboardButton(text="🌍 Продлить в другой валюте", callback_data="cur:menu")],
         [InlineKeyboardButton(text="📅 Моя подписка", callback_data="status")],
     )
 

@@ -154,6 +154,7 @@ class AccessService:
         stage: str = "soon",
         pay_url: str | None = None,
         price_label: str | None = None,
+        manual: bool = False,
     ) -> bool:
         """stage: soon — за N дней, today — в день окончания, late — на следующий день.
 
@@ -163,7 +164,9 @@ class AccessService:
         from ..keyboards import renew_kb, renew_url_kb
 
         price = price_label or fmt_price(self.settings.price, self.settings.currency)
-        if stage == "today":
+        if manual:
+            text = texts.RENEWAL_MANUAL
+        elif stage == "today":
             text = texts.RENEWAL_TODAY.format(price=price)
         elif stage == "late":
             deadline = paid_until + timedelta(days=self.settings.grace_days)

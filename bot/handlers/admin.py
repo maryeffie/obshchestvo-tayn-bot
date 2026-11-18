@@ -432,7 +432,9 @@ def build_router(app: App) -> Router:
         await state.update_data(tg_id=tg_id)
         await state.set_state(AdminStates.grant_days)
         await message.answer(
-            texts.ADMIN_ASK_DAYS.format(days=settings.subscription_days), reply_markup=cancel_kb()
+            f"Участник: {escape(human_username(user or {'tg_id': tg_id}))} (ID <code>{tg_id}</code>). "
+            "Сверьте ID с участником до выдачи доступа.\n\n"
+            + texts.ADMIN_ASK_DAYS.format(days=settings.subscription_days), reply_markup=cancel_kb()
         )
 
     @router.message(AdminStates.grant_days, is_admin, F.text)
